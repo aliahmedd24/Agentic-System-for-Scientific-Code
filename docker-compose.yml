@@ -1,0 +1,129 @@
+# Docker Compose configuration for Scientific Paper Analysis System
+# 
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d --build      # Rebuild and start
+#   docker-compose logs -f app        # View logs
+#   docker-compose down               # Stop all services
+#
+# Environment variables (create .env file):
+#   GOOGLE_API_KEY=your_gemini_api_key
+#   ANTHROPIC_API_KEY=your_anthropic_api_key
+#   OPENAI_API_KEY=your_openai_api_key
+#   GITHUB_TOKEN=your_github_token (optional, for private repos)
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # Main Application
+  # ==========================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: scientific-paper-analyzer
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Persistent storage for uploads, outputs, and reports
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+      - reports_data:/app/reports/generated
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - app_network
+
+  # ==========================================================================
+  # Code Execution Sandbox (isolated container for running generated code)
+  # ==========================================================================
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    container_name: code-sandbox
+    # No ports exposed - only accessible from app container
+    environment:
+      - SANDBOX_TIMEOUT=120
+      - MAX_MEMORY=512m
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M,mode=1777
+    networks:
+      - sandbox_network
+    profiles:
+      - sandbox  # Only start with: docker-compose --profile sandbox up
+
+  # ==========================================================================
+  # Development Service (with hot reload)
+  # ==========================================================================
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: scientific-paper-analyzer-dev
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - LOG_LEVEL=DEBUG
+    volumes:
+      # Mount source code for hot reload
+      - .:/app
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+    restart: unless-stopped
+    networks:
+      - app_network
+    profiles:
+      - dev  # Only start with: docker-compose --profile dev up
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  app_network:
+    driver: bridge
+  sandbox_network:
+    driver: bridge
+    internal: true  # No external access
+
+# ==========================================================================
+# Volumes
+# ==========================================================================
+volumes:
+  uploads_data:
+    name: paper_analyzer_uploads
+  outputs_data:
+    name: paper_analyzer_outputs
+  reports_data:
+    name: paper_analyzer_reports
