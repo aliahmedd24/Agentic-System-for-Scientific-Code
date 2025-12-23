@@ -25,6 +25,7 @@ class LogLevel(Enum):
 
 
 class LogCategory(Enum):
+    SYSTEM = "system"
     AGENT = "agent"
     LLM = "llm"
     PIPELINE = "pipeline"
@@ -32,6 +33,7 @@ class LogCategory(Enum):
     NETWORK = "network"
     VALIDATION = "validation"
     PARSING = "parsing"
+    USER = "user"          
 
 
 class ErrorSeverity(Enum):
@@ -240,19 +242,24 @@ class SystemLogger:
         
         return log_entry
 
-    def debug(self, category: LogCategory, message: str, **kwargs):
+    def debug(self, message: str, category: LogCategory = LogCategory.SYSTEM, context: Optional[Dict[str, Any]] = None, **kwargs):
+        kwargs['data'] = context or kwargs.get('data')
         return self.log(LogLevel.DEBUG, category, message, **kwargs)
 
-    def info(self, category: LogCategory, message: str, **kwargs):
+    def info(self, message: str, category: LogCategory = LogCategory.SYSTEM, context: Optional[Dict[str, Any]] = None, **kwargs):
+        kwargs['data'] = context or kwargs.get('data')
         return self.log(LogLevel.INFO, category, message, **kwargs)
 
-    def warning(self, category: LogCategory, message: str, **kwargs):
+    def warning(self, message: str, category: LogCategory = LogCategory.SYSTEM, context: Optional[Dict[str, Any]] = None, **kwargs):
+        kwargs['data'] = context or kwargs.get('data')
         return self.log(LogLevel.WARNING, category, message, **kwargs)
 
-    def error(self, category: LogCategory, message: str, **kwargs):
+    def error(self, message: str, category: LogCategory = LogCategory.SYSTEM, context: Optional[Dict[str, Any]] = None, **kwargs):
+        kwargs['data'] = context or kwargs.get('data')
         return self.log(LogLevel.ERROR, category, message, **kwargs)
 
-    def critical(self, category: LogCategory, message: str, **kwargs):
+    def critical(self, message: str, category: LogCategory = LogCategory.SYSTEM, context: Optional[Dict[str, Any]] = None, **kwargs):
+        kwargs['data'] = context or kwargs.get('data')
         return self.log(LogLevel.CRITICAL, category, message, **kwargs)
 
     def get_recent_logs(self, count: int = 100) -> list[Dict]:

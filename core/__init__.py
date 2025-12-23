@@ -20,7 +20,7 @@ from .knowledge_graph import (
 )
 
 from .orchestrator import (
-    PipelineStage, PipelineEvent, PipelineConfig, PipelineResult,
+    PipelineStage, PipelineEvent, PipelineResult,
     PipelineOrchestrator
 )
 
@@ -42,7 +42,7 @@ __all__ = [
     'create_paper_node', 'create_concept_node', 'create_function_node', 'create_mapping_node',
     
     # Orchestrator
-    'PipelineStage', 'PipelineEvent', 'PipelineConfig', 'PipelineResult',
+    'PipelineStage', 'PipelineEvent', 'PipelineResult',
     'PipelineOrchestrator',
     
     # Prompts
