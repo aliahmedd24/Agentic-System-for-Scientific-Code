@@ -33,7 +33,7 @@ class LogCategory(Enum):
     NETWORK = "network"
     VALIDATION = "validation"
     PARSING = "parsing"
-    USER = "user"          
+    USER = "user"
 
 
 class ErrorSeverity(Enum):
@@ -296,16 +296,15 @@ def with_retry(
                     if attempt < max_attempts - 1:
                         delay = strategy.calculate_delay(category, attempt)
                         logger.warning(
-                            LogCategory.AGENT,
                             f"{operation_name} failed (attempt {attempt + 1}/{max_attempts}), "
-                            f"retrying in {delay:.1f}s: {str(e)}"
+                            f"retrying in {delay:.1f}s: {str(e)}",
+                            category=LogCategory.AGENT
                         )
                         await asyncio.sleep(delay)
                     else:
                         logger.error(
-                            LogCategory.AGENT,
-                            f"{operation_name} failed after {max_attempts} attempts",
-                            error=e
+                            f"{operation_name} failed after {max_attempts} attempts: {str(e)}",
+                            category=LogCategory.AGENT
                         )
 
             raise AgentError(StructuredError(

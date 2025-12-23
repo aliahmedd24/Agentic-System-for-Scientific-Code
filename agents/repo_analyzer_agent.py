@@ -72,9 +72,12 @@ class RepoAnalyzerAgent(BaseAgent):
         self.github_token = github_token or os.getenv("GITHUB_TOKEN")
         self._temp_dirs: List[str] = []
     
-    async def process(self, repo_url: str, kg: KnowledgeGraph) -> Dict[str, Any]:
+    async def process(self, repo_url: str = None, knowledge_graph: KnowledgeGraph = None, kg: KnowledgeGraph = None) -> Dict[str, Any]:
         """Main processing method."""
-        return await self.analyze(repo_url, kg)
+        graph = knowledge_graph or kg
+        if not graph:
+            graph = KnowledgeGraph()
+        return await self.analyze(repo_url, graph)
     
     async def analyze(
         self,

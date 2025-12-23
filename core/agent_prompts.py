@@ -235,44 +235,136 @@ For each concept, find the best matching code element(s):
 Be thorough and conservative with confidence scores. High confidence (>0.8) requires strong evidence."""
 
 
-CODING_AGENT_SYSTEM_PROMPT = """You are an expert Python developer specializing in scientific computing. You write clean, well-documented, executable code.
+CODING_AGENT_SYSTEM_PROMPT = """You are an expert Python developer specializing in validating scientific paper implementations.
 
-Key principles:
-- Write syntactically correct, runnable code
-- Include proper error handling
-- Add helpful comments and docstrings
-- Use type hints where appropriate
-- Keep code focused and minimal
-- Always include visualization code when appropriate
+Your task is to write test scripts that:
+1. Import and use ACTUAL code from the repository (not reimplementations)
+2. Validate that the code correctly implements paper concepts
+3. Test with small synthetic data to verify behavior
+4. Print clear validation results
 
-Your code should demonstrate scientific concepts clearly."""
+CRITICAL RULES:
+- ALWAYS import from the repository using the module structure provided
+- DO NOT reimplement algorithms - use the actual repo code
+- Create minimal test data inline
+- Use try/except to handle import errors gracefully
+- Print "VALIDATION PASSED" or "VALIDATION FAILED" with details
+- Keep tests focused and under 80 lines
+- Generate code in the SAME LANGUAGE as the repository"""
 
 
-CODING_AGENT_TEST_GENERATION_PROMPT = """Generate a test script that demonstrates these paper concepts using the code repository.
+CODING_AGENT_TEST_GENERATION_PROMPT = """Generate a validation test for this paper concept using the ACTUAL repository code.
 
+Language: {language}
 Paper Concept: {concept_name}
 Description: {concept_description}
 
-Mapped Code:
-{mapped_code}
+Repository Code to Import:
+- Module/Class/Function: {code_element}
+- File Path: {code_file}
+- Repository Name: {repo_name}
 
-Repository Path: {repo_path}
-Dependencies: {dependencies}
+Actual Implementation Code (for reference):
+```
+{actual_code}
+```
 
-Generate a complete, runnable Python script that:
-1. Imports necessary modules from the repository
-2. Sets up minimal test data/configuration
-3. Demonstrates the concept in action
-4. Captures and displays results
-5. Creates a visualization if appropriate
+Available packages: {packages}
 
-The script should:
-- Be fully self-contained and runnable
-- Handle errors gracefully
-- Print informative output
-- Save any visualizations to files
+Generate a {language} script that:
+1. Imports/includes the actual {code_element} from the repository
+2. Creates minimal synthetic test data
+3. Runs the code and validates behavior matches paper description
+4. Prints "VALIDATION PASSED" or "VALIDATION FAILED"
 
-Provide ONLY the Python code, no markdown or explanations:"""
+LANGUAGE-SPECIFIC GUIDELINES:
+
+For Python:
+- Use: from {repo_name}.module import {code_element}
+- Test data: numpy arrays
+- Print results with f-strings
+
+For Julia:
+- Use: include("/repo/path/to/file.jl") or using {repo_name}
+- Test data: Arrays with rand(), randn()
+- Print with println()
+
+For R:
+- Use: source("/repo/path/to/file.R") or library({repo_name})
+- Test data: matrix(), rnorm()
+- Print with cat() or print()
+
+For MATLAB/Octave:
+- Use: addpath('/repo/path') then call functions
+- Test data: rand(), randn()
+- Print with disp() or fprintf()
+
+Provide ONLY the {language} code:"""
+
+
+# Language-specific prompt templates
+PYTHON_TEST_TEMPLATE = '''import sys
+import numpy as np
+
+try:
+    from {repo_name}.{module_path} import {code_element}
+    print(f"Imported {code_element}")
+except ImportError as e:
+    print(f"VALIDATION FAILED: Import error - {{e}}")
+    sys.exit(1)
+
+# Test
+try:
+    test_data = np.random.randn(2, 8, 64).astype(np.float32)
+    result = {code_element}(test_data)
+    print(f"Output: {{result}}")
+    print("VALIDATION PASSED: {concept_name}")
+except Exception as e:
+    print(f"VALIDATION FAILED: {{e}}")
+    sys.exit(1)
+'''
+
+JULIA_TEST_TEMPLATE = '''# Include repository code
+try
+    include("/repo/{code_file}")
+    println("Loaded {code_element}")
+catch e
+    println("VALIDATION FAILED: Include error - $e")
+    exit(1)
+end
+
+# Test
+try
+    test_data = randn(Float32, 2, 8, 64)
+    result = {code_element}(test_data)
+    println("Output: $result")
+    println("VALIDATION PASSED: {concept_name}")
+catch e
+    println("VALIDATION FAILED: $e")
+    exit(1)
+end
+'''
+
+R_TEST_TEMPLATE = '''# Source repository code
+tryCatch({{
+    source("/repo/{code_file}")
+    cat("Loaded {code_element}\\n")
+}}, error = function(e) {{
+    cat("VALIDATION FAILED: Source error -", e$message, "\\n")
+    quit(status = 1)
+}})
+
+# Test
+tryCatch({{
+    test_data <- matrix(rnorm(128), nrow = 8, ncol = 16)
+    result <- {code_element}(test_data)
+    cat("Output:", result, "\\n")
+    cat("VALIDATION PASSED: {concept_name}\\n")
+}}, error = function(e) {{
+    cat("VALIDATION FAILED:", e$message, "\\n")
+    quit(status = 1)
+}})
+'''
 
 
 CODING_AGENT_VISUALIZATION_PROMPT = """Generate visualization code for these execution results:

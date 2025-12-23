@@ -1,0 +1,582 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analysis Report: Attention Is All You Need</title>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a25;
+            --accent-primary: #6366f1;
+            --accent-secondary: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.3);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        /* Header */
+        .report-header {
+            text-align: center;
+            padding: 3rem 2rem;
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+        }
+        
+        .report-header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--text-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .report-header .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+        
+        .meta-info {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        /* Sections */
+        .section {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .section-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .section-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: var(--accent-glow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--accent-primary);
+        }
+        
+        /* Cards */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+        
+        .card {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .card p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        /* Mappings Table */
+        .mappings-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .mappings-table th,
+        .mappings-table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .mappings-table th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .mappings-table td {
+            font-size: 0.875rem;
+        }
+        
+        .confidence-bar {
+            height: 6px;
+            background: var(--bg-primary);
+            border-radius: 3px;
+            overflow: hidden;
+            width: 100px;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-primary), var(--success));
+            border-radius: 3px;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background: var(--bg-primary);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.8125rem;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+        }
+        
+        /* Knowledge Graph */
+        #knowledge-graph {
+            width: 100%;
+            height: 500px;
+            background: var(--bg-primary);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .graph-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1rem;
+            justify-content: center;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        /* Results */
+        .result-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        
+        .result-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .status-success { background: rgba(34, 197, 94, 0.2); color: var(--success); }
+        .status-error { background: rgba(239, 68, 68, 0.2); color: var(--error); }
+        .status-warning { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        
+        /* Visualizations */
+        .visualization-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+        
+        .visualization-item {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+        
+        .visualization-item img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .visualization-caption {
+            padding: 0.75rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        /* Footer */
+        .report-footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .report-header h1 { font-size: 1.5rem; }
+            .meta-info { gap: 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="report-header">
+            <h1>Attention Is All You Need</h1>
+            <p class="subtitle">Scientific Paper Analysis Report</p>
+            <div class="meta-info">
+                <div class="meta-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    2025-12-23 02:01:00
+                </div>
+                <div class="meta-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                        <path d="M2 17l10 5 10-5"></path>
+                        <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                    0 Concept Mappings
+                </div>
+                <div class="meta-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                    0 Code Results
+                </div>
+            </div>
+        </header>
+        
+        <!-- Paper Overview -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">📄</div>
+                <h2>Paper Overview</h2>
+            </div>
+            
+            
+            <p style="margin-bottom: 0.75rem; color: var(--text-secondary);">
+                <strong>Authors:</strong> Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin
+            </p>
+            
+            
+            
+            <div class="card">
+                <h3>Abstract</h3>
+                <p>The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.</p>
+            </div>
+            
+            
+            
+        </section>
+        
+        <!-- Repository Analysis -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">📁</div>
+                <h2>Repository Analysis</h2>
+            </div>
+            
+            
+            <div class="card-grid">
+                <div class="card">
+                    <h3>Repository</h3>
+                    <p>https://github.com/tensorflow/tensor2tensor</p>
+                </div>
+                <div class="card">
+                    <h3>Primary Language</h3>
+                    <p>Python</p>
+                </div>
+                <div class="card">
+                    <h3>Total Files</h3>
+                    <p>0</p>
+                </div>
+                <div class="card">
+                    <h3>Setup Complexity</h3>
+                    <p>{'level': 'unknown'}</p>
+                </div>
+            </div>
+            
+            
+            
+        </section>
+        
+        <!-- Concept-to-Code Mappings -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">🔗</div>
+                <h2>Concept-to-Code Mappings</h2>
+            </div>
+            
+            
+            <p style="color: var(--text-secondary);">No mappings found.</p>
+            
+        </section>
+        
+        <!-- Code Execution Results -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">⚡</div>
+                <h2>Code Execution Results</h2>
+            </div>
+            
+            
+            <p style="color: var(--text-secondary);">No code execution results.</p>
+            
+        </section>
+        
+        <!-- Visualizations -->
+        
+        
+        <!-- Knowledge Graph -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">🌐</div>
+                <h2>Knowledge Graph</h2>
+            </div>
+            
+            <div id="knowledge-graph"></div>
+            
+            <div class="graph-legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #6366f1;"></div>
+                    Paper
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #22c55e;"></div>
+                    Concept
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #f59e0b;"></div>
+                    Algorithm
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #06b6d4;"></div>
+                    Repository
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ec4899;"></div>
+                    Function/Class
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #8b5cf6;"></div>
+                    Mapping
+                </div>
+            </div>
+        </section>
+        
+        <!-- Footer -->
+        <footer class="report-footer">
+            <p>Generated by Scientific Paper Analysis System</p>
+            <p>2025-12-23 02:01:00</p>
+        </footer>
+    </div>
+    
+    <!-- D3.js Knowledge Graph Visualization -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        const graphData = {"nodes": [{"id": "b36f9084", "name": "Attention Is All You Need", "type": "paper", "description": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.", "metadata": {"abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.", "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin"], "source": {"source": "1706.03762", "source_type": "url", "arxiv_id": "1706.03762", "title": "Attention Is All You Need", "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin"], "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.", "published": "2017-06-12T17:57:34+00:00", "categories": ["cs.CL", "cs.LG"], "url": "https://arxiv.org/pdf/1706.03762.pdf"}}}, {"id": "02a5f44a", "name": "tensor2tensor", "type": "repository", "description": "Analysis failed", "metadata": {"url": "https://github.com/tensorflow/tensor2tensor", "stats": {"total_files": 550, "code_files": 465, "classes": 93, "functions": 889}}}, {"id": "fd61e390", "name": "TransformerModel", "type": "class", "description": "A QueryProcessor using a trained Transformer model.\n\nThis processor supports the following visualizations:\n  - processing: Basic source and target text processing\n  - graph: A graph of the beam search process.", "metadata": {"file_path": "tensor2tensor\\insights\\transformer_model.py", "methods": ["__init__", "process"], "bases": ["query_processor.QueryProcessor"]}}, {"id": "4368df0e", "name": "BasicFcRelu", "type": "class", "description": "Basic fully-connected + ReLU model.", "metadata": {"file_path": "tensor2tensor\\models\\basic.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "4f0af7f8", "name": "ByteNet", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\bytenet.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "ae5fcab8", "name": "Distillation", "type": "class", "description": "Distillation from a teacher to student network.\n\nFirst, a teacher is trained on a task; Second, a student is trained to perform\nthe task while matching the teacher's softened outputs. For more details, see\nthe paper below.\n\nIn the hparams passed to this model include the desired\n{teacher/student}_model and {teacher/student}_hparams to be used. Also,\nspecify the distillation temperature and task-distillation balance.\n\nDistilling the Knowledge in a Neural Network\nHinton, Vinyals and Dean\nhttps://a", "metadata": {"file_path": "tensor2tensor\\models\\distillation.py", "methods": ["__init__", "body", "top"], "bases": ["t2t_model.T2TModel"]}}, {"id": "c52b0d07", "name": "EvolvedTransformer", "type": "class", "description": "The Evolved Transformer from arxiv.org/abs/1901.11117 .", "metadata": {"file_path": "tensor2tensor\\models\\evolved_transformer.py", "methods": ["__init__"], "bases": ["transformer.Transformer"]}}, {"id": "5c41c47a", "name": "Imagetransformer", "type": "class", "description": "Conditional image generation with attention. See file docstring.\n\nThe model admits either a Categorical or discretized mixture of logistic\ndistributions (DMOL) as the likelihood. When using DMOL for training, double\ncheck that the evaluation metrics also use it.", "metadata": {"file_path": "tensor2tensor\\models\\image_transformer.py", "methods": ["body", "loss", "sample", "_slow_greedy_infer"], "bases": ["t2t_model.T2TModel"]}}, {"id": "f82da15d", "name": "ImagetransformerMoe", "type": "class", "description": "Conditional image generation with attention and MoE.", "metadata": {"file_path": "tensor2tensor\\models\\image_transformer.py", "methods": ["use_body_sharded", "body_sharded"], "bases": ["t2t_model.T2TModel"]}}, {"id": "7e97c92e", "name": "Imagetransformer2d", "type": "class", "description": "Conditional image generation with attention. See file docstring.", "metadata": {"file_path": "tensor2tensor\\models\\image_transformer_2d.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "a41211fa", "name": "Img2imgTransformer", "type": "class", "description": "Image 2 Image transformer net.", "metadata": {"file_path": "tensor2tensor\\models\\image_transformer_2d.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "575bc1be", "name": "Img2imgTransformerBlockParallel", "type": "class", "description": "Image-to-image transformer predicting blocks of the output in parallel.", "metadata": {"file_path": "tensor2tensor\\models\\image_transformer_2d.py", "methods": ["body", "top", "loss", "_greedy_infer", "_beam_decode", "_slow_greedy_infer_guess_and_check"], "bases": ["t2t_model.T2TModel"]}}, {"id": "cd8894af", "name": "LSTMEncoder", "type": "class", "description": "LSTM encoder only.", "metadata": {"file_path": "tensor2tensor\\models\\lstm.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "f49fa23d", "name": "LSTMSeq2seq", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\lstm.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "84575514", "name": "LSTMSeq2seqAttention", "type": "class", "description": "Seq to seq LSTM with attention.", "metadata": {"file_path": "tensor2tensor\\models\\lstm.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "0270d72e", "name": "LSTMSeq2seqBidirectionalEncoder", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\lstm.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "05c52dae", "name": "LSTMSeq2seqAttentionBidirectionalEncoder", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\lstm.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "9427b3f1", "name": "MtfImageTransformer", "type": "class", "description": "Image Transformer in mesh_tensorflow.", "metadata": {"file_path": "tensor2tensor\\models\\mtf_image_transformer.py", "methods": ["inputs_vocab_dim", "targets_vocab_dim", "outputs_vocab_dim", "pos_dim", "rows_dim", "cols_dim", "orig_cols_dim", "channels_dim", "model_dim", "max_length_dim", "length_dim", "heads_dim", "kv_dim", "feedforward_dim", "activation_type", "create_positional_emb_2d", "mtf_model_fn"], "bases": ["mtf_model.MtfModel"]}}, {"id": "b74f2fc7", "name": "MtfResNet", "type": "class", "description": "ResNet in mesh_tensorflow.", "metadata": {"file_path": "tensor2tensor\\models\\mtf_resnet.py", "methods": ["set_activation_type", "mtf_model_fn"], "bases": ["mtf_model.MtfModel"]}}, {"id": "e85f5051", "name": "MtfTransformer", "type": "class", "description": "Transformer in mesh_tensorflow.", "metadata": {"file_path": "tensor2tensor\\models\\mtf_transformer.py", "methods": ["__init__", "batch_dims", "inputs_vocab_dim", "targets_vocab_dim", "model_dim", "max_length_dim", "length_dim", "memory_length_dim", "heads_dim", "kv_dim", "feedforward_dim", "master_dtype", "slice_dtype", "activation_dtype", "_import_to_batch_by_length", "_embedding_and_softmax_vars", "_noisy_targets_from_spec", "_noisy_targets", "_mtf_model_fn", "mtf_model_fn", "_targets_vocab_size", "_inputs_vocab_size", "_feedforward_layer", "_layer_stack", "sample", "_sample"], "bases": ["mtf_model.MtfModel"]}}, {"id": "0b1c7e7f", "name": "MtfUnitransformer", "type": "class", "description": "Single-stack Transformer (Transformer Decoder) in mesh_tensorflow.\n\nCan optionally be autoregressive (language generation) or non-autoregressive\nlike BERT.", "metadata": {"file_path": "tensor2tensor\\models\\mtf_transformer2.py", "methods": ["batch_dims", "combine_batch_dims", "autoregressive", "variable_dtype", "length_dim", "_import_to_batch_by_length", "_import_feature", "model", "_mtf_model_fn", "mtf_model_fn", "_targets_vocab_size", "_inputs_vocab_size", "sample"], "bases": ["mtf_model.MtfModel"]}}, {"id": "7058d1d6", "name": "MtfBitransformer", "type": "class", "description": "Encoder-Decoder Transformer in mesh_tensorflow.", "metadata": {"file_path": "tensor2tensor\\models\\mtf_transformer2.py", "methods": ["model", "_mtf_model_fn", "sample"], "bases": ["MtfUnitransformer"]}}, {"id": "9c3f50b3", "name": "NeuralAssistant", "type": "class", "description": "Attention net.  See file docstring.", "metadata": {"file_path": "tensor2tensor\\models\\neural_assistant.py", "methods": ["__init__", "model_fn", "encode_knowledge_bottom", "compute_knowledge_selection_and_loss", "body", "_normalize_body_output", "_beam_decode", "_greedy_infer"], "bases": ["transformer.Transformer"]}}, {"id": "f69ddd8b", "name": "NeuralGPU", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\neural_gpu.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "decf41e2", "name": "DiagonalNeuralGPU", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\neural_gpu.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "4dcf7dce", "name": "Resnet", "type": "class", "description": "Residual Network.", "metadata": {"file_path": "tensor2tensor\\models\\resnet.py", "methods": ["body", "infer"], "bases": ["t2t_model.T2TModel"]}}, {"id": "83742d01", "name": "Revnet", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\revnet.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "5495f597", "name": "ShakeShake", "type": "class", "description": "Implements the Shake-Shake architecture.\n\nFrom <https://arxiv.org/pdf/1705.07485.pdf>\nThis is intended to match the CIFAR-10 version, and correspond to\n\"Shake-Shake-Batch\" in Table 1.", "metadata": {"file_path": "tensor2tensor\\models\\shake_shake.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "70dd1792", "name": "SliceNet", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\slicenet.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "ade0c045", "name": "TextCNN", "type": "class", "description": "Text CNN.", "metadata": {"file_path": "tensor2tensor\\models\\text_cnn.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "8f420435", "name": "Transformer", "type": "class", "description": "Attention net.  See file docstring.", "metadata": {"file_path": "tensor2tensor\\models\\transformer.py", "methods": ["__init__", "encode", "decode", "body", "_prepare_inputs_for_body", "_greedy_infer", "_beam_decode", "_prepare_inputs_for_decode", "_fast_decode_tpu", "get_decode_start_id", "get_decode_end_id", "_fast_decode"], "bases": ["t2t_model.T2TModel"]}}, {"id": "83d4177a", "name": "TransformerScorer", "type": "class", "description": "Transformer model, but only scores in PREDICT mode.\n\nCheckpoints between Transformer and TransformerScorer are interchangeable.", "metadata": {"file_path": "tensor2tensor\\models\\transformer.py", "methods": ["__init__", "infer"], "bases": ["Transformer"]}}, {"id": "3d4d72a9", "name": "TransformerEncoder", "type": "class", "description": "Transformer, encoder only.", "metadata": {"file_path": "tensor2tensor\\models\\transformer.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "196d1834", "name": "TransformerRegressor", "type": "class", "description": "Transformer inheriting from Encoder, for the regression problem.\n\nFinal result is a tensor that has a shape of (?, 1, 1, 1).", "metadata": {"file_path": "tensor2tensor\\models\\transformer.py", "methods": ["top"], "bases": ["TransformerEncoder"]}}, {"id": "57d436b5", "name": "TransformerMemory", "type": "class", "description": "Transformer language model with memory across chunks.", "metadata": {"file_path": "tensor2tensor\\models\\transformer.py", "methods": ["__init__", "has_input", "_beam_decode"], "bases": ["Transformer"]}}, {"id": "1f766aa4", "name": "AbstractGAN", "type": "class", "description": "Base class for all GANs.", "metadata": {"file_path": "tensor2tensor\\models\\vanilla_gan.py", "methods": ["discriminator", "generator", "losses", "body", "top"], "bases": ["t2t_model.T2TModel"]}}, {"id": "5ed2a553", "name": "SlicedGan", "type": "class", "description": "Sliced GAN for demonstration.", "metadata": {"file_path": "tensor2tensor\\models\\vanilla_gan.py", "methods": ["losses", "infer"], "bases": ["AbstractGAN"]}}, {"id": "c80fe36b", "name": "Xception", "type": "class", "description": "", "metadata": {"file_path": "tensor2tensor\\models\\xception.py", "methods": ["body"], "bases": ["t2t_model.T2TModel"]}}, {"id": "394b9a82", "name": "TranslationLayer", "type": "class", "description": "Interface for the layers used in the Translation search space.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["_apply_logic", "apply_layer", "num_params"], "bases": ["object"]}}, {"id": "a1a6a4e0", "name": "LayerRegisteredError", "type": "class", "description": "Layer name is already used in LayerRegistry.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": [], "bases": ["Exception"]}}, {"id": "6d2c474a", "name": "LayerRegistry", "type": "class", "description": "Registry of TranslationLayers.\n\nThe registry is a mapping of string names to TranslationLayers. Layers can be\nadded to the registry via `registry_layer()` and can be accessed via `get()`.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "register_layer", "get", "get_layer_names"], "bases": ["object"]}}, {"id": "da3316ca", "name": "ConvLayerBase", "type": "class", "description": "Convolution TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "_apply_logic"], "bases": ["TranslationLayer"]}}, {"id": "c82a62b6", "name": "SeparableConvLayer", "type": "class", "description": "Separable convolution TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "num_params"], "bases": ["ConvLayerBase"]}}, {"id": "1a4d6474", "name": "StandardConvLayer", "type": "class", "description": "Standard convolutional TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "num_params"], "bases": ["ConvLayerBase"]}}, {"id": "330685c8", "name": "DepthwiseConvLayer", "type": "class", "description": "Depthwise convolution TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "num_params"], "bases": ["ConvLayerBase"]}}, {"id": "408eba93", "name": "LightweightConvLayer", "type": "class", "description": "Lightweight convolution TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "num_params"], "bases": ["ConvLayerBase"]}}, {"id": "f2dc2284", "name": "DilatedConvLayer", "type": "class", "description": "Dilated convolution TranslationLayer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_conv_function", "num_params"], "bases": ["ConvLayerBase"]}}, {"id": "60dea574", "name": "AttentionLayer", "type": "class", "description": "Attention layer base class.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_apply_logic", "num_params"], "bases": ["TranslationLayer"]}}, {"id": "41c5fce0", "name": "AttendToEncoderLayerBase", "type": "class", "description": "Attend to encoder base, with configurable encoder attend points.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["_determine_encoder_cell_index", "_apply_logic", "num_params"], "bases": ["TranslationLayer"]}}, {"id": "69d37828", "name": "AttendToEncoderTopDownLayer", "type": "class", "description": "Attend to the encoder starting with the highest layer, then moving down.\n\nThis allows the decoder to see higher level features first and then\neventually move on to incorporate lower level information.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_determine_encoder_cell_index"], "bases": ["AttendToEncoderLayerBase"]}}, {"id": "67901369", "name": "GatedLinearUnitLayer", "type": "class", "description": "Gated Linaer Unit Layer.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["__init__", "_apply_logic", "num_params"], "bases": ["TranslationLayer"]}}, {"id": "eb64e3dd", "name": "IdentityLayer", "type": "class", "description": "Identity TranslationLayer.", "metadata": {"file_path": "tensor2tensor\\models\\neural_architecture_search\\nas_layers.py", "methods": ["_apply_logic", "num_params"], "bases": ["TranslationLayer"]}}, {"id": "7f3b917f", "name": "real_env_step_increment", "type": "function", "description": "Real env step increment.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(hparams)"}}, {"id": "54db8873", "name": "world_model_step_increment", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(hparams, epoch)"}}, {"id": "bf57b366", "name": "setup_directories", "type": "function", "description": "Setup directories.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(base_dir, subdirs)"}}, {"id": "afbb1d6b", "name": "make_relative_timing_fn", "type": "function", "description": "Make a function that logs the duration since it was made.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "()"}}, {"id": "5d3a3dee", "name": "make_log_fn", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(epoch, log_relative_time_fn)"}}, {"id": "aa8a08b7", "name": "random_rollout_subsequences", "type": "function", "description": "Chooses a random frame sequence of given length from a set of rollouts.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(rollouts, num_subsequences, subsequence_length)"}}, {"id": "bcbf5394", "name": "train_supervised", "type": "function", "description": "Train supervised.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(problem, model_name, hparams, data_dir, output_dir, train_steps, eval_steps, local_eval_frequency, schedule)"}}, {"id": "108ff922", "name": "train_agent", "type": "function", "description": "Train the PPO agent in the simulated environment.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(real_env, learner, world_model_dir, hparams, epoch)"}}, {"id": "240bfb71", "name": "train_agent_real_env", "type": "function", "description": "Train the PPO agent in the real environment.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(env, learner, hparams, epoch)"}}, {"id": "fe53a066", "name": "train_world_model", "type": "function", "description": "Train the world model on problem_name.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(env, data_dir, output_dir, hparams, world_model_steps_num, epoch)"}}, {"id": "5f12157f", "name": "load_metrics", "type": "function", "description": "Loads metrics for this epoch if they have already been written.\n\nThis reads the entire event file but it's small with just per-epoch metrics.\n\nArgs:\n  event_dir: TODO(koz4k): Document this.\n  epoch: TODO(koz4k): Document this.\n\nReturns:\n  metrics.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(event_dir, epoch)"}}, {"id": "2951cd7e", "name": "training_loop", "type": "function", "description": "Run the main training loop.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(hparams, output_dir, report_fn, report_metric)"}}, {"id": "a590c56a", "name": "main", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based.py", "signature": "(_)"}}, {"id": "df64807c", "name": "get_simulated_problem_name", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_agent_only.py", "signature": "(game)"}}, {"id": "ed0dae7a", "name": "main", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_agent_only.py", "signature": "(_)"}}, {"id": "42911c5a", "name": "_rlmb_base", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "54674b83", "name": "update_hparams", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(hparams, other)"}}, {"id": "94741ed6", "name": "rlmb_ppo_base", "type": "function", "description": "HParams for PPO base.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "639d7bb1", "name": "rlmb_ppo_base_param_sharing", "type": "function", "description": "HParams for PPO base with parameter sharing.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "97d05d43", "name": "rlmb_base", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "7a926e24", "name": "rlmb_dqn_base", "type": "function", "description": "rlmb_dqn_base params.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "1d693921", "name": "rlmb_dqn_guess1", "type": "function", "description": "DQN guess1 params.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "f56f8491", "name": "rlmb_dqn_guess1_rainbow", "type": "function", "description": "Rainbow rlmb_dqn guess1 params.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "20e6461a", "name": "rlmb_dqn_rainbow_large_epsilon", "type": "function", "description": "Rainbow rlmb_dqn params.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "2486aace", "name": "rlmb_dqn_guess1_2m_replay_buffer", "type": "function", "description": "DQN guess1 params, 2M replay buffer.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "3ca3a366", "name": "rlmb_dqn_guess1_10m_replay_buffer", "type": "function", "description": "DQN guess1 params, 10M replay buffer.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "f5887aa0", "name": "rlmb_basetest", "type": "function", "description": "Base setting but quicker with only 2 epochs.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "d9de35d6", "name": "rlmb_noresize", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "d36b7048", "name": "rlmb_ppo_quick", "type": "function", "description": "Base setting but quicker with only 2 epochs.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "fb3ff25a", "name": "rlmb_quick", "type": "function", "description": "Base setting but quicker with only 2 epochs.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "47da943d", "name": "rlmb_ppo_quick_param_sharing", "type": "function", "description": "HParams for PPO quick with parameter sharing.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "16e49fe5", "name": "rlmb_quick_noresize", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "5b09ead9", "name": "rlmb_quick_sd", "type": "function", "description": "Quick setting with stochastic discrete model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "af7243e9", "name": "rlmb_sdtest", "type": "function", "description": "Test setting with stochastic discrete model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "9151f52f", "name": "rlmb_quick_sm", "type": "function", "description": "Quick setting with sampling.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "6ba53201", "name": "rlmb_base_stochastic", "type": "function", "description": "Base setting with a stochastic next-frame model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "3edc84ce", "name": "rlmb_base_sampling_stochastic", "type": "function", "description": "Base setting with a stochastic next-frame model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "314c5b10", "name": "rlmb_base_stochastic_discrete", "type": "function", "description": "Base setting with stochastic discrete model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "21eccef2", "name": "rlmb_base_stochastic_discrete_sticky_actions", "type": "function", "description": "Base setting, stochastic discrete model with sticky action environment.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "ca9dc9e4", "name": "rlmb_base_stochastic_discrete_20k", "type": "function", "description": "Base setting with stochastic discrete model with 20k steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "9d89f7a8", "name": "rlmb_base_stochastic_discrete_50k", "type": "function", "description": "Base setting with stochastic discrete model with 50k steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "b81591e9", "name": "rlmb_base_stochastic_discrete_75k_model_steps", "type": "function", "description": "Base setting with stochastic discrete model with 75k WM steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "7b0e6284", "name": "rlmb_base_stochastic_discrete_20k_model_steps", "type": "function", "description": "Base SD setting with 20k WM steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "1b36d311", "name": "rlmb_base_stochastic_discrete_30k_model_steps", "type": "function", "description": "Base SD setting with 20k WM steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "1b06e846", "name": "rlmb_base_stochastic_discrete_200k", "type": "function", "description": "Base setting with stochastic discrete model with 200k steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "4c530d0c", "name": "rlmb_base_stochastic_discrete_500k", "type": "function", "description": "Base setting with stochastic discrete model with 500k steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "2bca7855", "name": "rlmb_base_stochastic_discrete_1m", "type": "function", "description": "Base setting with stochastic discrete model with 1M steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "eaacd8e6", "name": "rlmb_base_stochastic_discrete_param_sharing", "type": "function", "description": "Base setting with stochastic discrete model with parameter sharing.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "c9f2b569", "name": "rlmb_long", "type": "function", "description": "Long setting with base model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "9c621e23", "name": "rlmb_long_stochastic_discrete", "type": "function", "description": "Long setting with stochastic discrete model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "a30fa4e9", "name": "rlmb_long_stochastic_discrete_planner", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "5c6263c7", "name": "rlmb_long_stochastic_discrete_simulation_deterministic_starts", "type": "function", "description": "Long setting with stochastic discrete model & deterministic sim starts.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "e934645f", "name": "rlmb_long_stochastic_discrete_100steps", "type": "function", "description": "Long setting with stochastic discrete model, changed ppo steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "ebaa752f", "name": "rlmb_long_stochastic_discrete_25steps", "type": "function", "description": "Long setting with stochastic discrete model, changed ppo steps.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "b47a3c72", "name": "rlmb_long_stochastic_discrete_gamma95", "type": "function", "description": "Long setting with stochastic discrete model, changed gamma.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "25943a5e", "name": "rlmb_long_stochastic_discrete_gamma90", "type": "function", "description": "Long setting with stochastic discrete model, changed gamma.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "39f82e31", "name": "rlmb_base_stochastic_discrete_3epochs", "type": "function", "description": "Long setting with stochastic discrete model, changed epochs.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "0a0c2832", "name": "rlmb_base_stochastic_discrete_1epoch", "type": "function", "description": "Long setting with stochastic discrete model, changed epochs.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "01dba1d5", "name": "rlmb_base_recurrent", "type": "function", "description": "Base setting with recurrent model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "ef9ad424", "name": "rlmb_base_stochastic_discrete_noresize", "type": "function", "description": "Base setting with stochastic discrete model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "0e401aa4", "name": "rlmb_base_sv2p", "type": "function", "description": "Base setting with sv2p as world model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "5504f8fd", "name": "rlmb_base_sv2p_softmax", "type": "function", "description": "Base setting with sv2p as world model with softmax.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "6df3600b", "name": "rlmb_base_sv2p_deterministic", "type": "function", "description": "Base setting with deterministic sv2p as world model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "9d828d3b", "name": "rlmb_base_sv2p_deterministic_softmax", "type": "function", "description": "Base setting with deterministic sv2p as world model with softmax.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "597bc23c", "name": "rlmb_base_sampling", "type": "function", "description": "Base setting with a stochastic next-frame model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "11825e69", "name": "rlmb_base_sampling_noresize", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "631fbebc", "name": "_rlmb_tiny_overrides", "type": "function", "description": "Parameters to override for tiny setting excluding agent-related hparams.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "0ffb884e", "name": "rlmb_ppo_tiny", "type": "function", "description": "Tiny set for testing.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "5ac36c7a", "name": "rlmb_tiny", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "4061dd4f", "name": "rlmb_dqn_tiny", "type": "function", "description": "Tiny set for testing.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "edf38192", "name": "rlmb_tiny_stochastic", "type": "function", "description": "Tiny setting with a stochastic next-frame model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "1a52d1fa", "name": "rlmb_tiny_recurrent", "type": "function", "description": "Tiny setting with a recurrent next-frame model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "fe32c88e", "name": "rlmb_tiny_sv2p", "type": "function", "description": "Tiny setting with a tiny sv2p model.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "0c3b7fbd", "name": "rlmb_tiny_simulation_deterministic_starts", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "()"}}, {"id": "aa0d106f", "name": "rlmb_grid", "type": "function", "description": "Grid over games and frames, and 5 runs each for variance.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "9ef514f3", "name": "rlmb_variance", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "f79bb5bb", "name": "rlmb_variance_nogame", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "ceb53150", "name": "rlmb_three", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "2f03b56f", "name": "rlmb_test1", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "a529ec1e", "name": "rlmb_scheduled_sampling", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "276da14b", "name": "rlmb_all_games", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "e1606edf", "name": "rlmb_whitelisted_games", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "04a4ac22", "name": "rlmb_human_score_games", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "016a8f6e", "name": "rlmb_human_score_games_v100unfriendly", "type": "function", "description": "Games that for strange reasons often fail on v100s but work on p100s.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "ef797388", "name": "rlmb_curious_games10", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "dd683907", "name": "rlmb_curious_games5", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "3a049c9f", "name": "rlmb_debug_games", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "b70777b0", "name": "rlmb_ae_variance", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "5074cb4c", "name": "rlmb_ppolr_game", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "62831cc5", "name": "rlmb_ppolr", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "5b4fb891", "name": "rlmb_ae_ppo_lr", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "ea807228", "name": "rlmb_dropout_range", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "e8b8ad43", "name": "rlmb_intrinsic_reward_scale", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "11abc019", "name": "rlmb_l1l2cutoff_range", "type": "function", "description": "Loss and loss-cutoff tuning grid.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "b4c75b59", "name": "rlmb_xentcutoff_range", "type": "function", "description": "Cross entropy cutoff tuning grid.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "9b0e83f3", "name": "rlmb_pixel_noise", "type": "function", "description": "Input pixel noise tuning grid.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "93a23cf9", "name": "rlmb_dummy_range", "type": "function", "description": "Dummy tuning grid just to get the variance.", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "65cf1148", "name": "rlmb_epochs_num", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "fd77c5a2", "name": "rlmb_ppo_epochs_num", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}, {"id": "6ce14243", "name": "rlmb_ppo_epoch_len", "type": "function", "description": "", "metadata": {"file_path": "tensor2tensor\\rl\\trainer_model_based_params.py", "signature": "(rhp)"}}], "links": [{"source": "02a5f44a", "target": "fd61e390", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "4368df0e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "4f0af7f8", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ae5fcab8", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "c52b0d07", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5c41c47a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f82da15d", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "7e97c92e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "a41211fa", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "575bc1be", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "cd8894af", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f49fa23d", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "84575514", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0270d72e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "05c52dae", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9427b3f1", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "b74f2fc7", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "e85f5051", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0b1c7e7f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "7058d1d6", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9c3f50b3", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f69ddd8b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "decf41e2", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "4dcf7dce", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "83742d01", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5495f597", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "70dd1792", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ade0c045", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "8f420435", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "83d4177a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "3d4d72a9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "196d1834", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "57d436b5", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1f766aa4", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5ed2a553", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "c80fe36b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "394b9a82", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "a1a6a4e0", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "6d2c474a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "da3316ca", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "c82a62b6", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1a4d6474", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "330685c8", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "408eba93", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f2dc2284", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "60dea574", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "41c5fce0", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "69d37828", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "67901369", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "eb64e3dd", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "7f3b917f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "54db8873", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "bf57b366", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "afbb1d6b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5d3a3dee", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "aa8a08b7", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "bcbf5394", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "108ff922", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "240bfb71", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "fe53a066", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5f12157f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "2951cd7e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "a590c56a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "df64807c", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ed0dae7a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "42911c5a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "54674b83", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "94741ed6", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "639d7bb1", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "97d05d43", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "7a926e24", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1d693921", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f56f8491", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "20e6461a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "2486aace", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "3ca3a366", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f5887aa0", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "d9de35d6", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "d36b7048", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "fb3ff25a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "47da943d", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "16e49fe5", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5b09ead9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "af7243e9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9151f52f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "6ba53201", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "3edc84ce", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "314c5b10", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "21eccef2", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ca9dc9e4", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9d89f7a8", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "b81591e9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "7b0e6284", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1b36d311", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1b06e846", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "4c530d0c", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "2bca7855", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "eaacd8e6", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "c9f2b569", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9c621e23", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "a30fa4e9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5c6263c7", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "e934645f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ebaa752f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "b47a3c72", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "25943a5e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "39f82e31", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0a0c2832", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "01dba1d5", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ef9ad424", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0e401aa4", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5504f8fd", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "6df3600b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9d828d3b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "597bc23c", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "11825e69", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "631fbebc", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0ffb884e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5ac36c7a", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "4061dd4f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "edf38192", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "1a52d1fa", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "fe32c88e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "0c3b7fbd", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "aa0d106f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9ef514f3", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "f79bb5bb", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ceb53150", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "2f03b56f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "a529ec1e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "276da14b", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "e1606edf", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "04a4ac22", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "016a8f6e", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ef797388", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "dd683907", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "3a049c9f", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "b70777b0", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5074cb4c", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "62831cc5", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "5b4fb891", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "ea807228", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "e8b8ad43", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "11abc019", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "b4c75b59", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "9b0e83f3", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "93a23cf9", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "65cf1148", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "fd77c5a2", "type": "contains", "weight": 1.0}, {"source": "02a5f44a", "target": "6ce14243", "type": "contains", "weight": 1.0}]};
+        
+        if (graphData && graphData.nodes && graphData.nodes.length > 0) {
+            const container = document.getElementById('knowledge-graph');
+            const width = container.clientWidth;
+            const height = 500;
+            
+            const nodeColors = {
+                paper: '#6366f1',
+                concept: '#22c55e',
+                algorithm: '#f59e0b',
+                repository: '#06b6d4',
+                function: '#ec4899',
+                class: '#ec4899',
+                mapping: '#8b5cf6',
+                file: '#64748b',
+                default: '#94a3b8'
+            };
+            
+            const svg = d3.select('#knowledge-graph')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+            
+            const g = svg.append('g');
+            
+            // Zoom
+            svg.call(d3.zoom()
+                .extent([[0, 0], [width, height]])
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => g.attr('transform', event.transform)));
+            
+            // Simulation
+            const simulation = d3.forceSimulation(graphData.nodes)
+                .force('link', d3.forceLink(graphData.links).id(d => d.id).distance(80))
+                .force('charge', d3.forceManyBody().strength(-200))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(30));
+            
+            // Links
+            const link = g.append('g')
+                .attr('stroke', '#334155')
+                .attr('stroke-opacity', 0.6)
+                .selectAll('line')
+                .data(graphData.links)
+                .join('line')
+                .attr('stroke-width', 1);
+            
+            // Nodes
+            const node = g.append('g')
+                .selectAll('g')
+                .data(graphData.nodes)
+                .join('g')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            node.append('circle')
+                .attr('r', d => d.type === 'paper' ? 12 : 8)
+                .attr('fill', d => nodeColors[d.type] || nodeColors.default)
+                .attr('stroke', '#0a0a0f')
+                .attr('stroke-width', 2);
+            
+            node.append('text')
+                .text(d => d.label ? (d.label.length > 15 ? d.label.slice(0, 15) + '...' : d.label) : '')
+                .attr('x', 12)
+                .attr('y', 4)
+                .attr('fill', '#94a3b8')
+                .attr('font-size', '10px');
+            
+            // Tooltip
+            node.append('title')
+                .text(d => `${d.type}: ${d.label || d.id}`);
+            
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+            
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.fy = event.subject.y;
+            }
+            
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+            
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+        } else {
+            document.getElementById('knowledge-graph').innerHTML = 
+                '<p style="text-align: center; padding: 2rem; color: #64748b;">No knowledge graph data available</p>';
+        }
+    </script>
+</body>
+</html>

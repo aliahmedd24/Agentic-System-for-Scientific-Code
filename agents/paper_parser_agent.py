@@ -70,9 +70,14 @@ class PaperParserAgent(BaseAgent):
         
         return backends
     
-    async def process(self, paper_url: str, kg: KnowledgeGraph) -> Dict[str, Any]:
+    async def process(self, paper_source: str = None, paper_url: str = None, knowledge_graph: KnowledgeGraph = None, kg: KnowledgeGraph = None) -> Dict[str, Any]:
         """Main processing method."""
-        return await self.parse(paper_url, kg)
+        # Support both parameter names
+        source = paper_source or paper_url
+        graph = knowledge_graph or kg
+        if not graph:
+            graph = KnowledgeGraph()
+        return await self.parse(source, graph)
     
     async def parse(
         self,

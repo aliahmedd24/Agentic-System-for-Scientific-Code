@@ -50,12 +50,17 @@ class SemanticMapper(BaseAgent):
     
     async def process(
         self,
-        paper_data: Dict[str, Any],
-        repo_data: Dict[str, Any],
-        kg: KnowledgeGraph
-    ) -> List[Dict[str, Any]]:
+        paper_data: Dict[str, Any] = None,
+        repo_data: Dict[str, Any] = None,
+        knowledge_graph: KnowledgeGraph = None,
+        kg: KnowledgeGraph = None
+    ) -> Dict[str, Any]:
         """Main processing method."""
-        return await self.map_concepts(paper_data, repo_data, kg)
+        graph = knowledge_graph or kg
+        if not graph:
+            graph = KnowledgeGraph()
+        mappings = await self.map_concepts(paper_data, repo_data, graph)
+        return {"mappings": mappings}
     
     async def map_concepts(
         self,

@@ -12,6 +12,13 @@ from enum import Enum
 
 import httpx
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, rely on system env vars
+
 from .error_handling import (
     logger, LogCategory, ErrorCategory, ErrorSeverity,
     create_error, AgentError, with_retry
@@ -42,13 +49,19 @@ class BaseLLMProvider(ABC):
         self.config = config
         self.client: Optional[httpx.AsyncClient] = None
 
+    async def _ensure_client(self):
+        """Ensure httpx client is initialized."""
+        if self.client is None:
+            self.client = httpx.AsyncClient(timeout=httpx.Timeout(self.config.timeout))
+
     async def __aenter__(self):
-        self.client = httpx.AsyncClient(timeout=httpx.Timeout(self.config.timeout))
+        await self._ensure_client()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
             await self.client.aclose()
+            self.client = None
 
     @abstractmethod
     async def generate(
@@ -90,6 +103,8 @@ class GeminiProvider(BaseLLMProvider):
         prompt: str,
         system_instruction: Optional[str] = None
     ) -> str:
+        await self._ensure_client()
+        
         url = f"{self.BASE_URL}/models/{self.config.model}:generateContent"
         
         contents = [{"parts": [{"text": prompt}]}]
@@ -177,6 +192,8 @@ class AnthropicProvider(BaseLLMProvider):
         prompt: str,
         system_instruction: Optional[str] = None
     ) -> str:
+        await self._ensure_client()
+        
         url = f"{self.BASE_URL}/messages"
         
         body = {
@@ -262,6 +279,8 @@ class OpenAIProvider(BaseLLMProvider):
         prompt: str,
         system_instruction: Optional[str] = None
     ) -> str:
+        await self._ensure_client()
+        
         url = f"{self.BASE_URL}/chat/completions"
         
         messages = []
@@ -382,11 +401,14 @@ class LLMClient:
         # Get API key from environment if not provided
         if not api_key:
             env_keys = {
-                LLMProvider.GEMINI: "GEMINI_API_KEY",
-                LLMProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
-                LLMProvider.OPENAI: "OPENAI_API_KEY",
+                LLMProvider.GEMINI: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+                LLMProvider.ANTHROPIC: ["ANTHROPIC_API_KEY"],
+                LLMProvider.OPENAI: ["OPENAI_API_KEY"],
             }
-            api_key = os.getenv(env_keys.get(llm_provider, ""))
+            for key_name in env_keys.get(llm_provider, []):
+                api_key = os.getenv(key_name)
+                if api_key:
+                    break
         
         if not api_key:
             raise AgentError(create_error(
@@ -422,8 +444,8 @@ class LLMClient:
     async def __aenter__(self):
         await self._provider.__aenter__()
         logger.info(
-            LogCategory.LLM,
-            f"Initialized {self.config.provider.value} client with model {self.config.model}"
+            f"Initialized {self.config.provider.value} client with model {self.config.model}",
+            category=LogCategory.LLM
         )
         return self
 
@@ -437,13 +459,13 @@ class LLMClient:
     ) -> str:
         """Generate a response from the LLM."""
         logger.debug(
-            LogCategory.LLM,
-            f"Generating response (prompt length: {len(prompt)} chars)"
+            f"Generating response (prompt length: {len(prompt)} chars)",
+            category=LogCategory.LLM
         )
         response = await self._provider.generate(prompt, system_instruction)
         logger.debug(
-            LogCategory.LLM,
-            f"Received response (length: {len(response)} chars)"
+            f"Received response (length: {len(response)} chars)",
+            category=LogCategory.LLM
         )
         return response
 
@@ -455,8 +477,8 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Generate a structured JSON response."""
         logger.debug(
-            LogCategory.LLM,
-            f"Generating structured response"
+            f"Generating structured response",
+            category=LogCategory.LLM
         )
         return await self._provider.generate_structured(prompt, schema, system_instruction)
 

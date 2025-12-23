@@ -39,19 +39,19 @@ class BaseAgent(ABC):
     
     def log_info(self, message: str, **kwargs):
         """Log an info message."""
-        logger.info(LogCategory.AGENT, message, agent=self.name, **kwargs)
+        logger.info(message, category=LogCategory.AGENT, agent=self.name, **kwargs)
     
     def log_warning(self, message: str, **kwargs):
         """Log a warning message."""
-        logger.warning(LogCategory.AGENT, message, agent=self.name, **kwargs)
+        logger.warning(message, category=LogCategory.AGENT, agent=self.name, **kwargs)
     
     def log_error(self, message: str, **kwargs):
         """Log an error message."""
-        logger.error(LogCategory.AGENT, message, agent=self.name, **kwargs)
+        logger.error(message, category=LogCategory.AGENT, agent=self.name, **kwargs)
     
     def log_debug(self, message: str, **kwargs):
         """Log a debug message."""
-        logger.debug(LogCategory.AGENT, message, agent=self.name, **kwargs)
+        logger.debug(message, category=LogCategory.AGENT, agent=self.name, **kwargs)
     
     async def _timed_operation(self, operation_name: str, coro):
         """Execute a coroutine and track its duration."""
