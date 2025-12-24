@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List, Set
 from urllib.parse import urlparse
 
 from .base_agent import BaseAgent
+from .parsers import ParserFactory, CodeElement
 from core.llm_client import LLMClient
 from core.knowledge_graph import (
     KnowledgeGraph, NodeType, EdgeType,
@@ -71,13 +72,29 @@ class RepoAnalyzerAgent(BaseAgent):
         super().__init__(llm_client, name="RepoAnalyzer")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN")
         self._temp_dirs: List[str] = []
+        self._parser_factory = ParserFactory()
     
-    async def process(self, repo_url: str = None, knowledge_graph: KnowledgeGraph = None, kg: KnowledgeGraph = None) -> Dict[str, Any]:
-        """Main processing method."""
-        graph = knowledge_graph or kg
-        if not graph:
-            graph = KnowledgeGraph()
-        return await self.analyze(repo_url, graph)
+    async def process(
+        self,
+        *,
+        repo_url: str,
+        knowledge_graph: KnowledgeGraph = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze a code repository and extract structure.
+
+        Args:
+            repo_url: GitHub URL or local path (REQUIRED)
+            knowledge_graph: Optional knowledge graph to populate
+
+        Returns:
+            Dict with repository analysis (RepoAnalyzerOutput)
+        """
+        if not repo_url:
+            raise ValueError("repo_url is required")
+        if knowledge_graph is None:
+            knowledge_graph = KnowledgeGraph()
+        return await self.analyze(repo_url, knowledge_graph)
     
     async def analyze(
         self,
@@ -281,53 +298,96 @@ class RepoAnalyzerAgent(BaseAgent):
         repo_path: Path,
         structure: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Extract classes, functions, and other code elements."""
+        """
+        Extract classes, functions, and other code elements using multi-language parsers.
+
+        Supports: Python, Julia, R, JavaScript/TypeScript
+        """
         elements = {
             "classes": [],
             "functions": [],
             "imports": [],
             "constants": [],
+            "language_stats": {}
         }
-        
-        # Focus on Python files for now
-        python_files = [f for f in structure["code_files"] if f["extension"] == ".py"]
-        
-        # Limit to reasonable number of files
-        if len(python_files) > 50:
-            # Prioritize important-looking files
-            def file_importance(f):
-                path = f["path"].lower()
-                score = 0
-                if "model" in path: score += 3
-                if "train" in path: score += 2
-                if "main" in path: score += 2
-                if "core" in path: score += 1
-                if "util" in path: score -= 1
-                if "test" in path: score -= 2
-                return -score
-            
-            python_files = sorted(python_files, key=file_importance)[:50]
-        
-        for file_info in python_files:
+
+        # Get language statistics
+        language_stats = self._parser_factory.get_language_stats(repo_path)
+        elements["language_stats"] = language_stats
+        primary_language = self._parser_factory.detect_primary_language(repo_path)
+
+        self.log_info(f"Primary language: {primary_language}, stats: {language_stats}")
+
+        # Get all parseable files
+        supported_extensions = set(self._parser_factory.supported_extensions)
+        code_files = [
+            f for f in structure["code_files"]
+            if f["extension"].lower() in supported_extensions
+        ]
+
+        # Limit to reasonable number of files with smart prioritization
+        if len(code_files) > 100:
+            code_files = self._prioritize_files(code_files)[:100]
+
+        for file_info in code_files:
             file_path = repo_path / file_info["path"]
             try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
-                file_elements = self._parse_python_file(content, file_info["path"])
-                
-                elements["classes"].extend(file_elements.get("classes", []))
-                elements["functions"].extend(file_elements.get("functions", []))
+                # Use the multi-language parser factory
+                file_elements = self._parser_factory.parse_file(file_path)
+
+                # Convert CodeElement objects to dicts for JSON serialization
+                for cls in file_elements.get("classes", []):
+                    if isinstance(cls, CodeElement):
+                        elements["classes"].append(cls.to_dict())
+                    else:
+                        elements["classes"].append(cls)
+
+                for func in file_elements.get("functions", []):
+                    if isinstance(func, CodeElement):
+                        elements["functions"].append(func.to_dict())
+                    else:
+                        elements["functions"].append(func)
+
                 elements["imports"].extend(file_elements.get("imports", []))
                 elements["constants"].extend(file_elements.get("constants", []))
-                
+
             except Exception as e:
                 self.log_warning(f"Failed to parse {file_info['path']}: {e}")
-        
+
         self.log_info(
             f"Extracted {len(elements['classes'])} classes, "
-            f"{len(elements['functions'])} functions"
+            f"{len(elements['functions'])} functions from {len(code_files)} files"
         )
-        
+
         return elements
+
+    def _prioritize_files(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prioritize files for parsing based on importance signals."""
+        def file_importance(f):
+            path = f["path"].lower()
+            score = 0
+
+            # Positive signals
+            if "model" in path: score += 3
+            if "train" in path: score += 2
+            if "main" in path: score += 2
+            if "core" in path: score += 1
+            if "network" in path: score += 2
+            if "layer" in path: score += 2
+            if "loss" in path: score += 2
+            if "optim" in path: score += 1
+            if "data" in path: score += 1
+
+            # Negative signals
+            if "test" in path: score -= 2
+            if "util" in path: score -= 1
+            if "example" in path: score -= 1
+            if "demo" in path: score -= 1
+            if "__pycache__" in path: score -= 10
+
+            return -score  # Negate for ascending sort
+
+        return sorted(files, key=file_importance)
     
     def _parse_python_file(self, content: str, file_path: str) -> Dict[str, Any]:
         """Parse a Python file using AST."""

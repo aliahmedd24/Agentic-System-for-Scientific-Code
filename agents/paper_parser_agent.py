@@ -70,14 +70,27 @@ class PaperParserAgent(BaseAgent):
         
         return backends
     
-    async def process(self, paper_source: str = None, paper_url: str = None, knowledge_graph: KnowledgeGraph = None, kg: KnowledgeGraph = None) -> Dict[str, Any]:
-        """Main processing method."""
-        # Support both parameter names
-        source = paper_source or paper_url
-        graph = knowledge_graph or kg
-        if not graph:
-            graph = KnowledgeGraph()
-        return await self.parse(source, graph)
+    async def process(
+        self,
+        *,
+        paper_source: str,
+        knowledge_graph: KnowledgeGraph = None
+    ) -> Dict[str, Any]:
+        """
+        Parse a scientific paper and extract structured information.
+
+        Args:
+            paper_source: arXiv ID, URL, or local file path (REQUIRED)
+            knowledge_graph: Optional knowledge graph to populate
+
+        Returns:
+            Dict with extracted paper information (PaperParserOutput)
+        """
+        if not paper_source:
+            raise ValueError("paper_source is required")
+        if knowledge_graph is None:
+            knowledge_graph = KnowledgeGraph()
+        return await self.parse(paper_source, knowledge_graph)
     
     async def parse(
         self,
@@ -242,9 +255,13 @@ class PaperParserAgent(BaseAgent):
         return None
     
     async def _extract_text(self, pdf_path: str) -> str:
-        """Extract text from PDF using available backends."""
-        text = ""
-        
+        """
+        Extract text from PDF using available backends with quality validation.
+
+        Tries all backends and selects the one with best quality score.
+        """
+        results = []  # Store results from each backend
+
         for backend in self._pdf_backends:
             try:
                 if backend == "pymupdf":
@@ -253,16 +270,82 @@ class PaperParserAgent(BaseAgent):
                     text = self._extract_with_pdfplumber(pdf_path)
                 elif backend == "pypdf":
                     text = self._extract_with_pypdf(pdf_path)
-                
-                if text and len(text.strip()) > 100:
-                    self.log_info(f"Extracted text using {backend}")
-                    return text
-                    
+                else:
+                    continue
+
+                if text:
+                    quality_score = self._assess_text_quality(text)
+                    results.append({
+                        "backend": backend,
+                        "text": text,
+                        "quality": quality_score,
+                        "length": len(text)
+                    })
+                    self.log_info(f"Backend {backend}: {len(text)} chars, quality={quality_score:.2f}")
+
             except Exception as e:
                 self.log_warning(f"Backend {backend} failed: {e}")
                 continue
-        
-        return text
+
+        if not results:
+            raise AgentError(create_error(
+                ErrorCategory.PARSING,
+                "All PDF extraction backends failed",
+                context={"tried_backends": self._pdf_backends, "pdf_path": pdf_path},
+                suggestion="The PDF may be image-based (scanned), corrupted, or password-protected."
+            ))
+
+        # Select best result based on quality score
+        best_result = max(results, key=lambda r: r["quality"])
+
+        if best_result["quality"] < 0.3:
+            self.log_warning(f"Low quality extraction ({best_result['quality']:.2f}), results may be unreliable")
+
+        self.log_info(f"Selected {best_result['backend']} extraction (quality={best_result['quality']:.2f})")
+        return best_result["text"]
+
+    def _assess_text_quality(self, text: str) -> float:
+        """
+        Assess quality of extracted text (0-1 score).
+
+        Checks for:
+        - Minimum length
+        - Special character ratio
+        - Words per line
+        - Section markers
+        - Text repetition
+        """
+        if not text or len(text) < 100:
+            return 0.0
+
+        score = 1.0
+
+        # 1. Too many special characters (indicates OCR issues)
+        special_ratio = sum(1 for c in text if not c.isalnum() and not c.isspace()) / len(text)
+        if special_ratio > 0.3:
+            score -= 0.3
+
+        # 2. Too few words per line (indicates column merge issues)
+        lines = [l for l in text.split('\n') if l.strip()]
+        if lines:
+            avg_words_per_line = sum(len(l.split()) for l in lines) / len(lines)
+            if avg_words_per_line < 3:
+                score -= 0.2
+
+        # 3. Missing section markers (Abstract, Introduction, etc.)
+        section_markers = ["abstract", "introduction", "method", "result", "conclusion", "reference"]
+        found_markers = sum(1 for m in section_markers if m in text.lower())
+        if found_markers < 2:
+            score -= 0.2
+
+        # 4. Excessive repetition (indicates loop extraction bug)
+        words = text.lower().split()
+        if words:
+            unique_ratio = len(set(words)) / len(words)
+            if unique_ratio < 0.3:
+                score -= 0.3
+
+        return max(0.0, score)
     
     def _extract_with_pymupdf(self, pdf_path: str) -> str:
         """Extract text using PyMuPDF."""
@@ -301,18 +384,130 @@ class PaperParserAgent(BaseAgent):
         
         return "\n\n".join(text_parts)
     
+    def _smart_truncate(self, text: str, max_chars: int = 50000) -> str:
+        """
+        Intelligently truncate paper text while preserving critical sections.
+
+        Priority order:
+        1. Abstract (always keep full)
+        2. Methodology/Methods (keep full)
+        3. Introduction (keep first half)
+        4. Results/Experiments (keep key portions)
+        5. Conclusion (keep full)
+        6. Related Work (truncate heavily)
+        7. References (remove entirely)
+        """
+        if len(text) <= max_chars:
+            return text
+
+        # Split into sections
+        sections = self._identify_sections(text)
+
+        # Define section priorities and target sizes
+        priorities = {
+            "abstract": (1.0, 1.0),      # (priority, keep_ratio)
+            "introduction": (0.8, 0.6),
+            "methodology": (1.0, 1.0),
+            "methods": (1.0, 1.0),
+            "experiments": (0.7, 0.5),
+            "results": (0.7, 0.5),
+            "discussion": (0.5, 0.3),
+            "conclusion": (0.9, 1.0),
+            "related_work": (0.3, 0.2),
+            "references": (0.0, 0.0),    # Remove entirely
+            "full_text": (0.5, 0.5),     # Fallback
+        }
+
+        truncated_sections = []
+        remaining_chars = max_chars
+
+        # Process sections by priority (highest first)
+        sorted_sections = sorted(
+            [(name, priorities.get(name, (0.5, 0.5))) for name in sections.keys()],
+            key=lambda x: -x[1][0]
+        )
+
+        for section_name, (_, keep_ratio) in sorted_sections:
+            if section_name not in sections:
+                continue
+
+            section_text = sections[section_name]
+            target_length = int(len(section_text) * keep_ratio)
+            target_length = min(target_length, remaining_chars)
+
+            if target_length > 100:
+                truncated_text = self._truncate_section(section_text, target_length)
+                truncated_sections.append(f"\n\n## {section_name.upper()}\n{truncated_text}")
+                remaining_chars -= len(truncated_text)
+
+            if remaining_chars <= 0:
+                break
+
+        result = "".join(truncated_sections)
+
+        # If still too long, do final truncation
+        if len(result) > max_chars:
+            half = max_chars // 2
+            result = result[:half] + "\n\n[...TRUNCATED FOR LENGTH...]\n\n" + result[-half:]
+
+        return result
+
+    def _identify_sections(self, text: str) -> Dict[str, str]:
+        """Identify and extract paper sections using regex patterns."""
+        sections = {}
+
+        # Common section patterns
+        patterns = {
+            "abstract": r"(?i)(?:^|\n)\s*abstract\s*\n(.*?)(?=\n\s*(?:1\.?\s*)?introduction|\n\s*keywords|\Z)",
+            "introduction": r"(?i)(?:^|\n)\s*(?:1\.?\s*)?introduction\s*\n(.*?)(?=\n\s*(?:2\.?\s*)?(?:related|background|method|approach)|\Z)",
+            "methodology": r"(?i)(?:^|\n)\s*(?:\d\.?\s*)?(?:method(?:ology)?|approach|model)\s*\n(.*?)(?=\n\s*(?:\d\.?\s*)?(?:experiment|result|evaluation)|\Z)",
+            "experiments": r"(?i)(?:^|\n)\s*(?:\d\.?\s*)?(?:experiment|evaluation|result)s?\s*\n(.*?)(?=\n\s*(?:\d\.?\s*)?(?:discussion|conclusion|related)|\Z)",
+            "conclusion": r"(?i)(?:^|\n)\s*(?:\d\.?\s*)?conclusion\s*\n(.*?)(?=\n\s*(?:acknowledge|reference|appendix)|\Z)",
+            "related_work": r"(?i)(?:^|\n)\s*(?:\d\.?\s*)?related\s+work\s*\n(.*?)(?=\n\s*(?:\d\.?\s*)?(?:method|approach|conclusion)|\Z)",
+        }
+
+        for section_name, pattern in patterns.items():
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                sections[section_name] = match.group(1).strip()
+
+        # If no sections found, treat entire text as one section
+        if not sections:
+            sections["full_text"] = text
+
+        return sections
+
+    def _truncate_section(self, text: str, max_length: int) -> str:
+        """Truncate a section intelligently at sentence boundaries."""
+        if len(text) <= max_length:
+            return text
+
+        # Try to truncate at sentence boundary
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+
+        result = []
+        current_length = 0
+
+        for sentence in sentences:
+            if current_length + len(sentence) > max_length:
+                break
+            result.append(sentence)
+            current_length += len(sentence) + 1
+
+        if result:
+            return " ".join(result) + "..."
+        else:
+            return text[:max_length] + "..."
+
     async def _analyze_paper(
         self,
         text: str,
         metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Use LLM to analyze paper and extract structured information."""
-        # Truncate text if too long (keep first and last parts)
-        max_chars = 50000
-        if len(text) > max_chars:
-            half = max_chars // 2
-            text = text[:half] + "\n\n[...TRUNCATED...]\n\n" + text[-half:]
-        
+        # Use smart truncation instead of simple split
+        text = self._smart_truncate(text, max_chars=50000)
+
         prompt = PAPER_PARSER_EXTRACTION_PROMPT.format(paper_text=text)
         
         try:

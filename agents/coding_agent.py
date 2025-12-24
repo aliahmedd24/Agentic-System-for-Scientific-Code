@@ -133,29 +133,44 @@ class CodingAgent(BaseAgent):
     
     async def process(
         self,
-        mappings: List[Dict[str, Any]] = None,
-        repo_data: Dict[str, Any] = None,
+        *,
+        mappings: List[Dict[str, Any]],
+        repo_data: Dict[str, Any],
         knowledge_graph: KnowledgeGraph = None,
-        kg: KnowledgeGraph = None,
         execute: bool = True
     ) -> Dict[str, Any]:
-        """Main processing method."""
-        graph = knowledge_graph or kg
-        if not graph:
-            graph = KnowledgeGraph()
-        
-        repo_path = repo_data.get("_repo_path", "") if repo_data else ""
-        
+        """
+        Generate and execute validation tests for paper concepts.
+
+        Args:
+            mappings: Concept-to-code mappings (REQUIRED)
+            repo_data: Repository analysis data (REQUIRED)
+            knowledge_graph: Optional knowledge graph
+            execute: Whether to execute generated tests (default True)
+
+        Returns:
+            Dict with scripts, results, and language (CodingAgentOutput)
+        """
+        if not mappings:
+            self.log_warning("No mappings provided for code generation")
+            return {"scripts": [], "results": [], "language": "python"}
+        if not repo_data:
+            raise ValueError("repo_data is required")
+        if knowledge_graph is None:
+            knowledge_graph = KnowledgeGraph()
+
+        repo_path = repo_data.get("_repo_path", "")
+
         # Detect primary language
         language = self._detect_primary_language(repo_path, repo_data)
-        
+
         # Parse repository dependencies (language-aware)
         dependencies = await self._parse_repo_dependencies(repo_path, repo_data, language)
         dependencies["language"] = language
-        
+
         # Generate validation tests
-        scripts = await self.generate_tests(mappings or [], repo_data, graph, dependencies)
-        
+        scripts = await self.generate_tests(mappings, repo_data, knowledge_graph, dependencies)
+
         # Execute in sandbox
         results = []
         if execute and scripts:
@@ -171,7 +186,7 @@ class CodingAgent(BaseAgent):
                     )
             except Exception as e:
                 self.log_error(f"Sandbox execution failed: {e}")
-        
+
         return {"scripts": scripts, "results": results, "language": language}
     
     async def _parse_repo_dependencies(
@@ -359,12 +374,12 @@ class CodingAgent(BaseAgent):
         if not mappings:
             self.log_warning("No mappings provided for code generation")
             return []
-        
+
         generated_tests = []
         repo_path = repo_data.get("_repo_path", "") if repo_data else ""
         repo_name = repo_data.get("name", "repo") if repo_data else "repo"
         language = dependencies.get("language", "python")
-        
+
         # Get file extension for this language
         extensions = {
             "python": ".py",
@@ -373,52 +388,214 @@ class CodingAgent(BaseAgent):
             "matlab": ".m"
         }
         ext = extensions.get(language, ".py")
-        
+
         # Get mappings - prefer high-confidence but fall back to any
         high_confidence = [m for m in mappings if m.get("confidence", 0) >= 0.3]
         if not high_confidence:
             high_confidence = sorted(mappings, key=lambda x: x.get("confidence", 0), reverse=True)
         high_confidence = high_confidence[:5]
-        
+
         self.log_info(f"Generating {language} tests for {len(high_confidence)} mappings")
-        
+
         for i, mapping in enumerate(high_confidence):
             concept_name = mapping.get("concept_name", "Unknown")
             self.log_info(f"Generating test {i+1}/{len(high_confidence)}: {concept_name}")
-            
+
             try:
                 code_file = mapping.get("code_file", "")
                 code_element = mapping.get("code_element", "")
                 actual_code = await self._extract_code_context(repo_path, code_file, code_element)
-                
+
+                # Compute correct import path
+                import_info = self._compute_import_path(repo_path, code_file, code_element)
+
                 test_code = await self._generate_validation_test(
-                    mapping, repo_name, actual_code, dependencies
+                    mapping, repo_name, actual_code, dependencies, import_info
                 )
-                
+
                 if test_code:
-                    is_valid, error = self._validate_syntax(test_code, language)
-                    
-                    if not is_valid:
-                        test_code = await self._fix_code(test_code, error, "SyntaxError")
-                        is_valid, error = self._validate_syntax(test_code, language)
-                    
+                    # Multi-stage validation
+                    validation_result = await self._validate_test(
+                        test_code, language, repo_path, code_file
+                    )
+
+                    if not validation_result["valid"]:
+                        # Attempt to fix issues
+                        test_code = await self._fix_code(
+                            test_code,
+                            validation_result["error"],
+                            validation_result["error_type"]
+                        )
+                        validation_result = await self._validate_test(
+                            test_code, language, repo_path, code_file
+                        )
+
                     generated_tests.append({
                         "concept": concept_name,
                         "code_element": code_element,
                         "code_file": code_file,
                         "confidence": mapping.get("confidence", 0),
                         "code": test_code,
-                        "syntax_valid": is_valid,
-                        "syntax_error": error if not is_valid else None,
+                        "syntax_valid": validation_result["syntax_valid"],
+                        "import_valid": validation_result.get("import_valid", True),
+                        "validation_error": validation_result.get("error"),
                         "file_name": f"test_{i+1}_{self._safe_filename(concept_name)}{ext}",
-                        "language": language
+                        "language": language,
+                        "import_path": import_info.get("import_statement", "")
                     })
-                    
+
             except Exception as e:
                 self.log_error(f"Test generation failed for {concept_name}: {e}")
-        
+
         self.log_info(f"Generated {len(generated_tests)} test scripts")
         return generated_tests
+
+    def _compute_import_path(
+        self,
+        repo_path: str,
+        code_file: str,
+        code_element: str
+    ) -> Dict[str, Any]:
+        """
+        Compute the correct import path for a code element.
+
+        Returns:
+            Dict with import_statement, module_path, and element_name
+        """
+        if not repo_path or not code_file:
+            return {"import_statement": "", "module_path": "", "element_name": code_element}
+
+        # Normalize the file path
+        file_path = Path(code_file)
+
+        # Remove .py extension and convert path separators to dots
+        if file_path.suffix == ".py":
+            module_path = str(file_path.with_suffix("")).replace("/", ".").replace("\\", ".")
+
+            # Remove leading dots
+            module_path = module_path.lstrip(".")
+
+            # Handle __init__.py files
+            if module_path.endswith(".__init__"):
+                module_path = module_path[:-9]
+
+            if code_element:
+                import_statement = f"from {module_path} import {code_element}"
+            else:
+                import_statement = f"import {module_path}"
+
+            return {
+                "import_statement": import_statement,
+                "module_path": module_path,
+                "element_name": code_element
+            }
+
+        # For non-Python files, return basic info
+        return {
+            "import_statement": "",
+            "module_path": str(file_path),
+            "element_name": code_element
+        }
+
+    async def _validate_test(
+        self,
+        code: str,
+        language: str,
+        repo_path: str,
+        code_file: str = ""  # Reserved for future use
+    ) -> Dict[str, Any]:
+        """
+        Multi-stage test validation.
+
+        Validates:
+        1. Syntax correctness
+        2. Import statements
+        3. Basic structure
+        """
+        result = {
+            "valid": True,
+            "syntax_valid": True,
+            "import_valid": True,
+            "error": None,
+            "error_type": None
+        }
+
+        # Stage 1: Syntax validation
+        syntax_valid, syntax_error = self._validate_syntax(code, language)
+        result["syntax_valid"] = syntax_valid
+        if not syntax_valid:
+            result["valid"] = False
+            result["error"] = syntax_error
+            result["error_type"] = "SyntaxError"
+            return result
+
+        # Stage 2: Import validation (Python only for now)
+        if language == "python":
+            import_valid, import_error = self._validate_imports(code, repo_path)
+            result["import_valid"] = import_valid
+            if not import_valid:
+                result["valid"] = False
+                result["error"] = import_error
+                result["error_type"] = "ImportError"
+                return result
+
+        # Stage 3: Structure validation
+        structure_valid, structure_error = self._validate_test_structure(code, language)
+        if not structure_valid:
+            result["valid"] = False
+            result["error"] = structure_error
+            result["error_type"] = "StructureError"
+            return result
+
+        return result
+
+    def _validate_imports(self, code: str, repo_path: str) -> tuple:
+        """Validate that import statements reference existing modules."""
+        if not repo_path:
+            return True, None
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return True, None  # Syntax errors handled elsewhere
+
+        repo_path = Path(repo_path)
+        errors = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module:
+                    # Check if this is a repo-relative import
+                    module_path = node.module.replace(".", "/")
+                    potential_paths = [
+                        repo_path / f"{module_path}.py",
+                        repo_path / module_path / "__init__.py"
+                    ]
+
+                    # Only flag as error if it looks like a repo import but doesn't exist
+                    if not any(p.exists() for p in potential_paths):
+                        # Check if it's a standard library or third-party import
+                        first_part = node.module.split(".")[0]
+                        if (repo_path / first_part).exists() or (repo_path / f"{first_part}.py").exists():
+                            errors.append(f"Module not found: {node.module}")
+
+        if errors:
+            return False, "; ".join(errors)
+        return True, None
+
+    def _validate_test_structure(self, code: str, language: str) -> tuple:
+        """Validate that the test has proper structure."""
+        if language != "python":
+            return True, None
+
+        # Check for basic test structure elements
+        has_main_guard = "if __name__" in code
+        has_print_or_assert = "print(" in code or "assert " in code
+
+        if not has_main_guard and not has_print_or_assert:
+            return False, "Test has no output mechanism (print/assert)"
+
+        return True, None
     
     async def _extract_code_context(
         self, 
@@ -465,11 +642,18 @@ class CodingAgent(BaseAgent):
         mapping: Dict[str, Any],
         repo_name: str,
         actual_code: str,
-        dependencies: Dict[str, Any]
+        dependencies: Dict[str, Any],
+        import_info: Dict[str, Any] = None
     ) -> str:
         """Generate a test that validates the paper concept using actual repo code."""
         language = dependencies.get("language", "python")
-        
+        import_info = import_info or {}
+
+        # Build import hint for the prompt
+        import_hint = ""
+        if import_info.get("import_statement"):
+            import_hint = f"\nUse this import: {import_info['import_statement']}"
+
         prompt = CODING_AGENT_TEST_GENERATION_PROMPT.format(
             language=language,
             concept_name=mapping.get("concept_name", "Unknown"),
@@ -480,7 +664,11 @@ class CodingAgent(BaseAgent):
             actual_code=actual_code or "# Code not available",
             packages=", ".join(dependencies.get("packages", [])[:15])
         )
-        
+
+        # Add import hint to prompt
+        if import_hint:
+            prompt += import_hint
+
         try:
             code = await self.llm.generate(
                 prompt,

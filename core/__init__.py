@@ -24,6 +24,20 @@ from .orchestrator import (
     PipelineOrchestrator
 )
 
+from .resource_estimator import (
+    ComputeLevel, ResourceEstimate, ResourceEstimator, estimate_resources
+)
+
+from .metrics import (
+    MetricType, MetricDataPoint, AggregatedMetric, MetricsCollector,
+    get_metrics_collector, record_metric
+)
+
+from .checkpointing import (
+    CheckpointStage, CheckpointMetadata, Checkpoint, CheckpointManager,
+    get_checkpoint_manager
+)
+
 from . import agent_prompts
 
 __all__ = [
@@ -32,19 +46,30 @@ __all__ = [
     'StructuredLog', 'StructuredError', 'AgentError',
     'SystemLogger', 'logger', 'RetryStrategy',
     'with_retry', 'create_error',
-    
+
     # LLM
     'LLMProvider', 'LLMConfig', 'LLMClient',
     'GeminiProvider', 'AnthropicProvider', 'OpenAIProvider',
-    
+
     # Knowledge Graph
     'NodeType', 'EdgeType', 'KGNode', 'KGEdge', 'KnowledgeGraph',
     'create_paper_node', 'create_concept_node', 'create_function_node', 'create_mapping_node',
-    
+
     # Orchestrator
     'PipelineStage', 'PipelineEvent', 'PipelineResult',
     'PipelineOrchestrator',
-    
+
+    # Resource Estimation
+    'ComputeLevel', 'ResourceEstimate', 'ResourceEstimator', 'estimate_resources',
+
+    # Metrics
+    'MetricType', 'MetricDataPoint', 'AggregatedMetric', 'MetricsCollector',
+    'get_metrics_collector', 'record_metric',
+
+    # Checkpointing
+    'CheckpointStage', 'CheckpointMetadata', 'Checkpoint', 'CheckpointManager',
+    'get_checkpoint_manager',
+
     # Prompts
     'agent_prompts'
 ]
