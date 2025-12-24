@@ -38,6 +38,13 @@ from .checkpointing import (
     get_checkpoint_manager
 )
 
+from .bubblewrap_sandbox import (
+    IsolationLevel, SandboxConfig, ExecutionResult,
+    SandboxBackend, SubprocessBackend, DockerBackend,
+    BubblewrapBackend, QEMUBackend, SandboxManager,
+    get_sandbox_manager, execute_in_sandbox
+)
+
 from . import agent_prompts
 
 __all__ = [
@@ -69,6 +76,12 @@ __all__ = [
     # Checkpointing
     'CheckpointStage', 'CheckpointMetadata', 'Checkpoint', 'CheckpointManager',
     'get_checkpoint_manager',
+
+    # Sandbox
+    'IsolationLevel', 'SandboxConfig', 'ExecutionResult',
+    'SandboxBackend', 'SubprocessBackend', 'DockerBackend',
+    'BubblewrapBackend', 'QEMUBackend', 'SandboxManager',
+    'get_sandbox_manager', 'execute_in_sandbox',
 
     # Prompts
     'agent_prompts'
