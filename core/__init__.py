@@ -45,6 +45,13 @@ from .bubblewrap_sandbox import (
     get_sandbox_manager, execute_in_sandbox
 )
 
+from .qemu_backend import (
+    QEMUAccelerator, VMState, ExecutionMode,
+    QEMUVMConfig, QEMUExecutionResult,
+    QEMUImageManager, QEMUMonitor, QEMUVirtualMachine,
+    QEMUPool, QEMUBackendImpl, create_qemu_backend
+)
+
 from . import agent_prompts
 
 __all__ = [
@@ -82,6 +89,12 @@ __all__ = [
     'SandboxBackend', 'SubprocessBackend', 'DockerBackend',
     'BubblewrapBackend', 'QEMUBackend', 'SandboxManager',
     'get_sandbox_manager', 'execute_in_sandbox',
+
+    # QEMU Backend
+    'QEMUAccelerator', 'VMState', 'ExecutionMode',
+    'QEMUVMConfig', 'QEMUExecutionResult',
+    'QEMUImageManager', 'QEMUMonitor', 'QEMUVirtualMachine',
+    'QEMUPool', 'QEMUBackendImpl', 'create_qemu_backend',
 
     # Prompts
     'agent_prompts'

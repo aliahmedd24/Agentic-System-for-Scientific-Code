@@ -24,6 +24,7 @@ from core.agent_prompts import (
     CODING_AGENT_DEBUG_PROMPT
 )
 from core.error_handling import logger, LogCategory
+from core.resource_estimator import estimate_resources
 
 
 # Supported languages and their configurations
@@ -171,6 +172,33 @@ class CodingAgent(BaseAgent):
         # Generate validation tests
         scripts = await self.generate_tests(mappings, repo_data, knowledge_graph, dependencies)
 
+        # Estimate resources for the generated code
+        resource_estimate = None
+        if scripts:
+            # Combine all script code for resource estimation
+            all_code = "\n".join(script.get("code", "") for script in scripts)
+            resource_estimate = estimate_resources(code=all_code)
+
+            # Log resource warnings
+            for warning in resource_estimate.warnings:
+                self.log_warning(f"Resource warning: {warning}")
+
+            if resource_estimate.gpu_required:
+                self.log_warning(
+                    f"Code may require GPU ({resource_estimate.gpu_memory_gb}GB VRAM)"
+                )
+
+            if resource_estimate.memory_gb > 8:
+                self.log_warning(
+                    f"High memory requirement: {resource_estimate.memory_gb}GB"
+                )
+
+            # Check feasibility (16GB RAM, no GPU assumed for local execution)
+            if not resource_estimate.is_feasible(available_memory_gb=16, has_gpu=False):
+                self.log_warning(
+                    "Code may require more resources than available - proceeding anyway"
+                )
+
         # Execute in sandbox
         results = []
         if execute and scripts:
@@ -187,7 +215,12 @@ class CodingAgent(BaseAgent):
             except Exception as e:
                 self.log_error(f"Sandbox execution failed: {e}")
 
-        return {"scripts": scripts, "results": results, "language": language}
+        return {
+            "scripts": scripts,
+            "results": results,
+            "language": language,
+            "resource_estimate": resource_estimate.to_dict() if resource_estimate else None
+        }
     
     async def _parse_repo_dependencies(
         self, 

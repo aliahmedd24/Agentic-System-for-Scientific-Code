@@ -16,7 +16,7 @@ import json
 import asyncio
 import tempfile
 import subprocess
-import shutil
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -24,6 +24,14 @@ from enum import Enum
 from abc import ABC, abstractmethod
 
 from .error_handling import logger, LogCategory
+from .qemu_backend import (
+    QEMUBackendImpl,
+    QEMUVMConfig,
+    QEMUImageManager,
+    QEMUExecutionResult,
+    ExecutionMode,
+    create_qemu_backend,
+)
 
 
 class IsolationLevel(Enum):
@@ -412,82 +420,278 @@ class BubblewrapBackend(SandboxBackend):
 
 
 class QEMUBackend(SandboxBackend):
-    """QEMU full system virtualization (strongest isolation)."""
+    """
+    QEMU full system virtualization backend (strongest isolation).
 
-    def __init__(self):
-        self._available = None
+    Provides complete system-level isolation by running code inside
+    fully virtualized QEMU instances. This is the most secure option,
+    offering hardware-level isolation from the host system.
+
+    Features:
+    - Full system virtualization with hardware isolation
+    - Support for KVM (Linux), WHPX (Windows), HVF (macOS) acceleration
+    - Automatic fallback to TCG software emulation
+    - VM snapshot support for fast reset between executions
+    - VirtFS (9p) for efficient host-guest file sharing
+    - QMP (QEMU Machine Protocol) for VM control
+    - Optional VM pooling for reduced startup latency
+    """
+
+    def __init__(
+        self,
+        use_pool: bool = False,
+        pool_size: int = 2,
+        images_dir: Optional[Path] = None
+    ):
+        """
+        Initialize QEMU backend.
+
+        Args:
+            use_pool: Enable VM pooling for faster execution (pre-warms VMs)
+            pool_size: Number of VMs to keep in the pool
+            images_dir: Directory for VM images (default: ~/.scientific-agent/qemu-images)
+        """
+        self._available: Optional[bool] = None
+        self._backend: Optional[QEMUBackendImpl] = None
+        self._use_pool = use_pool
+        self._pool_size = pool_size
+        self._images_dir = images_dir
+        self._initialized = False
 
     def is_available(self) -> bool:
+        """Check if QEMU is available on this system."""
         if self._available is None:
-            try:
-                result = subprocess.run(
-                    ["qemu-system-x86_64", "--version"],
-                    capture_output=True,
-                    timeout=5
-                )
-                self._available = result.returncode == 0
-            except Exception:
+            # Check for qemu-system-x86_64
+            candidates = [
+                "qemu-system-x86_64",
+                "/usr/bin/qemu-system-x86_64",
+                "/usr/local/bin/qemu-system-x86_64",
+                "C:\\Program Files\\qemu\\qemu-system-x86_64.exe",
+                "C:\\Program Files (x86)\\qemu\\qemu-system-x86_64.exe",
+            ]
+
+            for candidate in candidates:
+                try:
+                    result = subprocess.run(
+                        [candidate, "--version"],
+                        capture_output=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        self._available = True
+                        logger.debug(
+                            f"QEMU found: {candidate}",
+                            category=LogCategory.SYSTEM
+                        )
+                        break
+                except Exception:
+                    continue
+            else:
                 self._available = False
+
         return self._available
 
     @property
     def isolation_level(self) -> IsolationLevel:
+        """Return the isolation level (QEMU = strongest)."""
         return IsolationLevel.QEMU
+
+    async def _ensure_initialized(self):
+        """Ensure the backend is initialized."""
+        if not self._initialized:
+            self._backend = create_qemu_backend(
+                use_pool=self._use_pool,
+                pool_size=self._pool_size,
+                images_dir=self._images_dir
+            )
+            self._initialized = True
 
     async def execute(
         self,
         script_path: Path,
         config: SandboxConfig
     ) -> ExecutionResult:
+        """
+        Execute a script in a QEMU virtual machine.
+
+        Args:
+            script_path: Path to the script to execute
+            config: Sandbox configuration
+
+        Returns:
+            ExecutionResult with output, exit code, and execution metadata
+        """
         result = ExecutionResult(success=False, isolation_level=self.isolation_level)
-
-        if not self.is_available():
-            result.error = "QEMU not available"
-            return result
-
-        if not config.qemu_image:
-            result.error = "QEMU image not specified"
-            return result
-
-        import time
         start_time = time.time()
 
-        # Create shared directory for script
-        shared_dir = tempfile.mkdtemp(prefix="qemu_share_")
-        script_dest = Path(shared_dir) / script_path.name
-        shutil.copy(script_path, script_dest)
+        # Check availability
+        if not self.is_available():
+            result.error = "QEMU not available on this system"
+            return result
 
-        # Build QEMU command
-        cmd = [
-            "qemu-system-x86_64",
-            "-m", config.qemu_memory,
-            "-smp", str(config.qemu_cpus),
-            "-drive", f"file={config.qemu_image},format=qcow2",
-            "-virtfs", f"local,path={shared_dir},mount_tag=share,security_model=none",
-            "-nographic",
-            "-enable-kvm" if self._kvm_available() else "-machine", "accel=tcg",
-        ]
+        # Ensure backend is initialized
+        await self._ensure_initialized()
 
-        # Disable network if needed
-        if not config.network_enabled:
-            cmd.extend(["-net", "none"])
-        else:
-            cmd.extend(["-net", "user", "-net", "nic"])
-
-        result.error = "QEMU execution requires VM image setup (not implemented)"
-        result.execution_time = time.time() - start_time
-
-        # Clean up
         try:
-            shutil.rmtree(shared_dir)
-        except Exception:
-            pass
+            # Build QEMU VM configuration from sandbox config
+            vm_config = QEMUVMConfig(
+                name=f"sandbox_{script_path.stem}_{int(time.time())}",
+                memory=config.qemu_memory,
+                cpus=config.qemu_cpus,
+                disk_image=config.qemu_image,
+                network_enabled=config.network_enabled,
+                timeout_seconds=config.timeout_seconds,
+                execution_mode=ExecutionMode.VIRTFS,
+                use_snapshot=True,  # Always use snapshots for safety
+            )
 
+            # If no image specified, try to find a base image for the language
+            if not vm_config.disk_image:
+                base_image = self._backend.get_base_image_path(config.language)
+                if base_image:
+                    vm_config.disk_image = str(base_image)
+                else:
+                    result.error = (
+                        f"No QEMU base image available for {config.language}. "
+                        f"Please create one at: {self._backend.image_manager.images_dir}"
+                    )
+                    result.execution_time = time.time() - start_time
+                    return result
+
+            # Execute in QEMU VM
+            qemu_result: QEMUExecutionResult = await self._backend.execute(
+                script_path=script_path,
+                config=vm_config,
+                language=config.language
+            )
+
+            # Convert QEMU result to standard ExecutionResult
+            result.success = qemu_result.success
+            result.stdout = qemu_result.stdout
+            result.stderr = qemu_result.stderr
+            result.exit_code = qemu_result.exit_code
+            result.execution_time = qemu_result.execution_time
+            result.output_files = qemu_result.output_files
+            result.error = qemu_result.error
+
+            logger.info(
+                f"QEMU execution completed",
+                category=LogCategory.EXECUTION,
+                context={
+                    "success": result.success,
+                    "exit_code": result.exit_code,
+                    "execution_time": f"{result.execution_time:.2f}s",
+                    "vm_boot_time": f"{qemu_result.vm_boot_time:.2f}s" if qemu_result.vm_boot_time else None
+                }
+            )
+
+        except Exception as e:
+            result.error = f"QEMU execution failed: {str(e)}"
+            result.stderr = str(e)
+            logger.error(
+                f"QEMU execution error: {e}",
+                category=LogCategory.EXECUTION
+            )
+
+        result.execution_time = time.time() - start_time
         return result
 
+    async def shutdown(self):
+        """Shutdown the QEMU backend and clean up resources."""
+        if self._backend:
+            await self._backend.shutdown()
+            self._initialized = False
+            logger.info("QEMU backend shutdown complete", category=LogCategory.SYSTEM)
+
     def _kvm_available(self) -> bool:
-        """Check if KVM acceleration is available."""
+        """Check if KVM acceleration is available (Linux only)."""
         return Path("/dev/kvm").exists()
+
+    def _get_accelerator_info(self) -> Dict[str, Any]:
+        """Get information about available hardware acceleration."""
+        import platform
+        system = platform.system().lower()
+
+        info = {
+            "platform": system,
+            "kvm": False,
+            "whpx": False,
+            "hvf": False,
+            "tcg": True,  # Always available
+        }
+
+        if system == "linux":
+            info["kvm"] = self._kvm_available()
+        elif system == "windows":
+            # Check WHPX via QEMU
+            try:
+                result = subprocess.run(
+                    ["qemu-system-x86_64", "-accel", "help"],
+                    capture_output=True,
+                    timeout=5
+                )
+                info["whpx"] = b"whpx" in result.stdout.lower()
+            except Exception:
+                pass
+        elif system == "darwin":
+            # Check HVF
+            try:
+                result = subprocess.run(
+                    ["qemu-system-x86_64", "-accel", "help"],
+                    capture_output=True,
+                    timeout=5
+                )
+                info["hvf"] = b"hvf" in result.stdout.lower()
+            except Exception:
+                pass
+
+        return info
+
+    @classmethod
+    def create_base_image(
+        cls,
+        language: str,
+        output_path: Optional[Path] = None,
+        size: str = "10G"
+    ) -> Path:
+        """
+        Create a base VM image for a specific language.
+
+        This is a helper method to create base images that can be used
+        for sandbox execution. The image should be set up with:
+        - Minimal Linux OS (e.g., Alpine, Debian minimal)
+        - Required language runtime (Python, Julia, R, etc.)
+        - VirtFS (9p) support for file sharing
+        - Optional: QEMU guest agent for enhanced control
+
+        Args:
+            language: Programming language (python, julia, r, matlab)
+            output_path: Output path for the image (optional)
+            size: Disk size (default: 10G)
+
+        Returns:
+            Path to the created image
+        """
+        image_manager = QEMUImageManager()
+
+        image_name = f"{language}-sandbox"
+        if output_path:
+            # Create at specified path
+            image_path = output_path
+        else:
+            image_path = image_manager.create_base_image(image_name, size)
+
+        logger.info(
+            f"Created base image template at: {image_path}",
+            category=LogCategory.SYSTEM,
+            context={
+                "language": language,
+                "size": size,
+                "note": "Image needs OS installation and language runtime setup"
+            }
+        )
+
+        return image_path
 
 
 class SandboxManager:

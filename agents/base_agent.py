@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from core.llm_client import LLMClient
 from core.knowledge_graph import KnowledgeGraph
 from core.error_handling import logger, LogCategory
+from core.metrics import get_metrics_collector
 
 
 @dataclass
@@ -53,6 +54,7 @@ class BaseAgent(ABC):
         self.name = name
         self._stats = AgentStats()
         self._logger = logger
+        self._metrics = get_metrics_collector()
 
     # ========================================================================
     # Required Properties (for protocol compliance)
@@ -107,10 +109,28 @@ class BaseAgent(ABC):
             self._stats.last_operation = datetime.now()
 
             self.log_debug(f"Completed {operation_name} in {duration_ms:.1f}ms")
+
+            # Record metrics for successful operation
+            self._metrics.record_agent_operation(
+                agent_name=self.name,
+                operation=operation_name,
+                duration_ms=duration_ms,
+                success=True
+            )
+
             return result
         except Exception as e:
             duration_ms = (datetime.now() - start).total_seconds() * 1000
             self.log_error(f"{operation_name} failed after {duration_ms:.1f}ms: {str(e)}")
+
+            # Record metrics for failed operation
+            self._metrics.record_agent_operation(
+                agent_name=self.name,
+                operation=operation_name,
+                duration_ms=duration_ms,
+                success=False
+            )
+
             raise
 
     # ========================================================================

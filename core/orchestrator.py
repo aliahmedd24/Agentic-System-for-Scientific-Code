@@ -12,6 +12,8 @@ from pathlib import Path
 
 from .knowledge_graph import KnowledgeGraph
 from .error_handling import logger, LogCategory
+from .checkpointing import get_checkpoint_manager, CheckpointStage
+from .metrics import get_metrics_collector
 
 
 class PipelineStage(Enum):
@@ -106,6 +108,10 @@ class PipelineOrchestrator:
         # Current state
         self._current_stage = PipelineStage.INITIALIZED
         self._current_progress = 0
+
+        # Checkpointing and metrics
+        self._checkpoint_manager = get_checkpoint_manager()
+        self._metrics = get_metrics_collector()
     
     async def _get_llm_client(self):
         """Get or create LLM client."""
@@ -187,22 +193,44 @@ class PipelineOrchestrator:
         self,
         paper_source: str,
         repo_url: str,
-        auto_execute: bool = True
+        auto_execute: bool = True,
+        resume: bool = False
     ) -> PipelineResult:
         """
         Execute the full analysis pipeline.
-        
+
         Args:
             paper_source: arXiv ID, URL, or path to PDF
             repo_url: GitHub repository URL
             auto_execute: Whether to execute generated code
-            
+            resume: Whether to resume from last checkpoint
+
         Returns:
             PipelineResult with all analysis data
         """
         result = PipelineResult(
             knowledge_graph=KnowledgeGraph()
         )
+
+        # Import time for stage timing
+        import time
+
+        # Check for resume from checkpoint
+        resume_from_stage = None
+        if resume:
+            checkpoint = self._checkpoint_manager.get_latest(paper_source, repo_url)
+            if checkpoint:
+                logger.info(f"Resuming from checkpoint: {checkpoint.metadata.stage.value}",
+                           category=LogCategory.PIPELINE)
+                result.paper_data = checkpoint.paper_data
+                result.repo_data = checkpoint.repo_data
+                result.mappings = checkpoint.mappings
+                result.code_results = checkpoint.code_results
+                # Note: KnowledgeGraph is rebuilt fresh on resume as it doesn't support deserialization
+                if checkpoint.knowledge_graph_data:
+                    logger.info("Knowledge graph will be rebuilt during resumed stages",
+                               category=LogCategory.PIPELINE)
+                resume_from_stage = checkpoint.metadata.stage
         
         try:
             await self._emit_event(
@@ -211,72 +239,146 @@ class PipelineOrchestrator:
             )
             
             # Stage 1: Parse Paper
-            await self._emit_event(
-                PipelineStage.PARSING_PAPER,
-                "Parsing scientific paper..."
-            )
-            try:
-                paper_parser = await self._get_paper_parser()
-                result.paper_data = await paper_parser.process(
-                    paper_source=paper_source,
-                    knowledge_graph=result.knowledge_graph
-                )
-                title = result.paper_data.get('title', 'Unknown') if result.paper_data else 'Unknown'
+            should_skip_paper = (resume_from_stage and
+                                 resume_from_stage.value in ['paper_parsed', 'repo_analyzed',
+                                                             'concepts_mapped', 'code_generated',
+                                                             'tests_executed', 'completed'])
+            if should_skip_paper:
+                logger.info("Skipping paper parsing (resuming from checkpoint)",
+                           category=LogCategory.PIPELINE)
+            else:
+                stage_start_time = time.time()
                 await self._emit_event(
                     PipelineStage.PARSING_PAPER,
-                    f"Paper parsed: {title}"
+                    "Parsing scientific paper..."
                 )
-            except Exception as e:
-                logger.error(f"Paper parsing failed: {e}", category=LogCategory.PIPELINE)
-                result.paper_data = {"error": str(e), "title": "Parse Failed"}
-                result.errors.append(str(e))
+                try:
+                    paper_parser = await self._get_paper_parser()
+                    result.paper_data = await paper_parser.process(
+                        paper_source=paper_source,
+                        knowledge_graph=result.knowledge_graph
+                    )
+                    title = result.paper_data.get('title', 'Unknown') if result.paper_data else 'Unknown'
+                    await self._emit_event(
+                        PipelineStage.PARSING_PAPER,
+                        f"Paper parsed: {title}"
+                    )
+
+                    # Save checkpoint and record metrics
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._checkpoint_manager.save(
+                        stage=CheckpointStage.PAPER_PARSED,
+                        paper_source=paper_source,
+                        repo_url=repo_url,
+                        paper_data=result.paper_data
+                    )
+                    self._metrics.record_pipeline_stage("paper_parsed", duration_ms, success=True)
+
+                except Exception as e:
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._metrics.record_pipeline_stage("paper_parsed", duration_ms, success=False)
+                    logger.error(f"Paper parsing failed: {e}", category=LogCategory.PIPELINE)
+                    result.paper_data = {"error": str(e), "title": "Parse Failed"}
+                    result.errors.append(str(e))
             
             # Stage 2: Analyze Repository
-            await self._emit_event(
-                PipelineStage.ANALYZING_REPO,
-                "Analyzing code repository..."
-            )
-            try:
-                repo_analyzer = await self._get_repo_analyzer()
-                result.repo_data = await repo_analyzer.process(
-                    repo_url=repo_url,
-                    knowledge_graph=result.knowledge_graph
-                )
-                name = result.repo_data.get('name', 'Unknown') if result.repo_data else 'Unknown'
+            should_skip_repo = (resume_from_stage and
+                                resume_from_stage.value in ['repo_analyzed', 'concepts_mapped',
+                                                            'code_generated', 'tests_executed', 'completed'])
+            if should_skip_repo:
+                logger.info("Skipping repo analysis (resuming from checkpoint)",
+                           category=LogCategory.PIPELINE)
+            else:
+                stage_start_time = time.time()
                 await self._emit_event(
                     PipelineStage.ANALYZING_REPO,
-                    f"Repository analyzed: {name}"
+                    "Analyzing code repository..."
                 )
-            except Exception as e:
-                logger.error(f"Repository analysis failed: {e}", category=LogCategory.PIPELINE)
-                result.repo_data = {"error": str(e), "name": "Analysis Failed"}
-                result.errors.append(str(e))
+                try:
+                    repo_analyzer = await self._get_repo_analyzer()
+                    result.repo_data = await repo_analyzer.process(
+                        repo_url=repo_url,
+                        knowledge_graph=result.knowledge_graph
+                    )
+                    name = result.repo_data.get('name', 'Unknown') if result.repo_data else 'Unknown'
+                    await self._emit_event(
+                        PipelineStage.ANALYZING_REPO,
+                        f"Repository analyzed: {name}"
+                    )
+
+                    # Save checkpoint and record metrics
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._checkpoint_manager.save(
+                        stage=CheckpointStage.REPO_ANALYZED,
+                        paper_source=paper_source,
+                        repo_url=repo_url,
+                        paper_data=result.paper_data,
+                        repo_data=result.repo_data
+                    )
+                    self._metrics.record_pipeline_stage("repo_analyzed", duration_ms, success=True)
+
+                except Exception as e:
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._metrics.record_pipeline_stage("repo_analyzed", duration_ms, success=False)
+                    logger.error(f"Repository analysis failed: {e}", category=LogCategory.PIPELINE)
+                    result.repo_data = {"error": str(e), "name": "Analysis Failed"}
+                    result.errors.append(str(e))
             
             # Stage 3: Semantic Mapping
-            await self._emit_event(
-                PipelineStage.MAPPING_CONCEPTS,
-                "Mapping concepts to code..."
-            )
-            try:
-                semantic_mapper = await self._get_semantic_mapper()
-                mapping_result = await semantic_mapper.process(
-                    paper_data=result.paper_data,
-                    repo_data=result.repo_data,
-                    knowledge_graph=result.knowledge_graph
-                )
-                result.mappings = mapping_result.get("mappings", []) if mapping_result else []
+            should_skip_mapping = (resume_from_stage and
+                                   resume_from_stage.value in ['concepts_mapped', 'code_generated',
+                                                               'tests_executed', 'completed'])
+            if should_skip_mapping:
+                logger.info("Skipping semantic mapping (resuming from checkpoint)",
+                           category=LogCategory.PIPELINE)
+            else:
+                stage_start_time = time.time()
                 await self._emit_event(
                     PipelineStage.MAPPING_CONCEPTS,
-                    f"Found {len(result.mappings)} concept-to-code mappings"
+                    "Mapping concepts to code..."
                 )
-            except Exception as e:
-                logger.error(f"Semantic mapping failed: {e}", category=LogCategory.PIPELINE)
-                result.mappings = []
-                result.errors.append(str(e))
+                try:
+                    semantic_mapper = await self._get_semantic_mapper()
+                    mapping_result = await semantic_mapper.process(
+                        paper_data=result.paper_data,
+                        repo_data=result.repo_data,
+                        knowledge_graph=result.knowledge_graph
+                    )
+                    result.mappings = mapping_result.get("mappings", []) if mapping_result else []
+                    await self._emit_event(
+                        PipelineStage.MAPPING_CONCEPTS,
+                        f"Found {len(result.mappings)} concept-to-code mappings"
+                    )
+
+                    # Save checkpoint and record metrics
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._checkpoint_manager.save(
+                        stage=CheckpointStage.CONCEPTS_MAPPED,
+                        paper_source=paper_source,
+                        repo_url=repo_url,
+                        paper_data=result.paper_data,
+                        repo_data=result.repo_data,
+                        mappings=result.mappings
+                    )
+                    self._metrics.record_pipeline_stage("concepts_mapped", duration_ms, success=True)
+
+                except Exception as e:
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._metrics.record_pipeline_stage("concepts_mapped", duration_ms, success=False)
+                    logger.error(f"Semantic mapping failed: {e}", category=LogCategory.PIPELINE)
+                    result.mappings = []
+                    result.errors.append(str(e))
             
             # Stage 4 & 5: Generate and Execute Code
-            result.code_results = []
-            if auto_execute and result.mappings:
+            should_skip_code = (resume_from_stage and
+                                resume_from_stage.value in ['tests_executed', 'completed'])
+            if should_skip_code:
+                logger.info("Skipping code generation/execution (resuming from checkpoint)",
+                           category=LogCategory.PIPELINE)
+                if not result.code_results:
+                    result.code_results = []
+            elif auto_execute and result.mappings:
+                stage_start_time = time.time()
                 await self._emit_event(
                     PipelineStage.GENERATING_CODE,
                     "Generating validation code..."
@@ -294,9 +396,28 @@ class PipelineOrchestrator:
                         PipelineStage.EXECUTING_CODE,
                         f"Executed {len(result.code_results)} test scripts"
                     )
+
+                    # Save checkpoint and record metrics
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._checkpoint_manager.save(
+                        stage=CheckpointStage.TESTS_EXECUTED,
+                        paper_source=paper_source,
+                        repo_url=repo_url,
+                        paper_data=result.paper_data,
+                        repo_data=result.repo_data,
+                        mappings=result.mappings,
+                        code_results=result.code_results,
+                        knowledge_graph_data=result.knowledge_graph.to_dict() if result.knowledge_graph else None
+                    )
+                    self._metrics.record_pipeline_stage("code_executed", duration_ms, success=True)
+
                 except Exception as e:
+                    duration_ms = (time.time() - stage_start_time) * 1000
+                    self._metrics.record_pipeline_stage("code_executed", duration_ms, success=False)
                     logger.error(f"Code generation/execution failed: {e}", category=LogCategory.PIPELINE)
                     result.errors.append(str(e))
+            else:
+                result.code_results = []
             
             # Stage 6: Complete
             await self._emit_event(
@@ -304,6 +425,18 @@ class PipelineOrchestrator:
                 "Analysis complete!"
             )
             result.status = "completed"
+
+            # Save final checkpoint
+            self._checkpoint_manager.save(
+                stage=CheckpointStage.COMPLETED,
+                paper_source=paper_source,
+                repo_url=repo_url,
+                paper_data=result.paper_data,
+                repo_data=result.repo_data,
+                mappings=result.mappings,
+                code_results=result.code_results,
+                knowledge_graph_data=result.knowledge_graph.to_dict() if result.knowledge_graph else None
+            )
             
         except Exception as e:
             result.status = "failed"

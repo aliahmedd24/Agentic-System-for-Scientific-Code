@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.orchestrator import PipelineOrchestrator, PipelineStage, PipelineEvent
 from core.knowledge_graph import KnowledgeGraph
 from core.error_handling import SystemLogger, LogLevel, LogCategory
+from core.metrics import get_metrics_collector
 
 
 # ============================================================================
@@ -365,6 +366,55 @@ async def cancel_job(job_id: str):
         })
     
     return {"message": f"Job {job_id} cancelled"}
+
+
+# ============================================================================
+# Metrics Endpoints
+# ============================================================================
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Get aggregated metrics summary for all pipeline operations."""
+    metrics = get_metrics_collector()
+    return metrics.get_summary()
+
+
+@app.get("/api/metrics/agents")
+async def get_agent_metrics():
+    """Get metrics for all agent operations."""
+    metrics = get_metrics_collector()
+    all_metrics = metrics.get_all_metrics()
+
+    # Filter to agent-related metrics
+    agent_metrics = {
+        key: metric.to_dict()
+        for key, metric in all_metrics.items()
+        if "agent" in key.lower()
+    }
+
+    return {
+        "agent_metrics": agent_metrics,
+        "total_operations": sum(m["count"] for m in agent_metrics.values()) if agent_metrics else 0
+    }
+
+
+@app.get("/api/metrics/pipeline")
+async def get_pipeline_metrics():
+    """Get metrics for pipeline stages."""
+    metrics = get_metrics_collector()
+    all_metrics = metrics.get_all_metrics()
+
+    # Filter to pipeline-related metrics
+    pipeline_metrics = {
+        key: metric.to_dict()
+        for key, metric in all_metrics.items()
+        if "pipeline" in key.lower()
+    }
+
+    return {
+        "pipeline_metrics": pipeline_metrics,
+        "overall_accuracy": metrics.calculate_accuracy_score()
+    }
 
 
 # ============================================================================
