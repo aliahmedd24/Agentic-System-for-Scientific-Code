@@ -113,6 +113,27 @@ class SubprocessBackend(SandboxBackend):
     def isolation_level(self) -> IsolationLevel:
         return IsolationLevel.SUBPROCESS
 
+    def _create_preexec_fn(self, config: SandboxConfig):
+        """Create a preexec function to set resource limits on Unix."""
+        def set_limits():
+            if sys.platform != "win32":
+                import resource
+                # Memory limit (soft, hard) in bytes
+                memory_bytes = config.memory_limit_mb * 1024 * 1024
+                try:
+                    resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+                except (ValueError, resource.error):
+                    pass  # May fail if limit is too low
+
+                # CPU time limit in seconds
+                cpu_seconds = int(config.timeout_seconds * config.cpu_limit)
+                try:
+                    resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+                except (ValueError, resource.error):
+                    pass
+
+        return set_limits if sys.platform != "win32" else None
+
     async def execute(
         self,
         script_path: Path,
@@ -132,13 +153,17 @@ class SubprocessBackend(SandboxBackend):
         if config.python_path:
             env["PYTHONPATH"] = config.python_path
 
+        # Create preexec function for resource limits (Unix only)
+        preexec_fn = self._create_preexec_fn(config)
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *run_cmd, str(script_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=config.working_dir if Path(config.working_dir).exists() else None,
-                env=env
+                env=env,
+                preexec_fn=preexec_fn
             )
 
             stdout, stderr = await asyncio.wait_for(
@@ -383,6 +408,18 @@ class BubblewrapBackend(SandboxBackend):
         cmd.extend(run_cmd)
         cmd.append(f"/scripts/{script_path.name}")
 
+        # Wrap with systemd-run for resource limits if available
+        if self._has_systemd_run():
+            cmd = [
+                "systemd-run",
+                "--scope",
+                "--user",
+                f"--property=MemoryMax={config.memory_limit_mb}M",
+                f"--property=CPUQuota={int(config.cpu_limit * 100)}%",
+                "--quiet",
+                "--"
+            ] + cmd
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -417,6 +454,18 @@ class BubblewrapBackend(SandboxBackend):
             "matlab": ["octave", "--no-gui"]
         }
         return commands.get(language, [sys.executable])
+
+    def _has_systemd_run(self) -> bool:
+        """Check if systemd-run is available for resource limiting."""
+        try:
+            result = subprocess.run(
+                ["systemd-run", "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
 
 class QEMUBackend(SandboxBackend):

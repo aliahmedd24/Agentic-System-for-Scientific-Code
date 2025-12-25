@@ -256,42 +256,29 @@ class PaperParserAgent(BaseAgent):
     
     async def _extract_text(self, pdf_path: str) -> str:
         """
-        Extract text from PDF using available backends with quality validation.
+        Extract text from PDF using available backends with retry and quality validation.
 
-        Tries all backends and selects the one with best quality score.
+        Tries all backends with retries for each, and selects the one with best quality score.
         """
         results = []  # Store results from each backend
+        backend_errors = {}  # Track errors per backend
 
         for backend in self._pdf_backends:
-            try:
-                if backend == "pymupdf":
-                    text = self._extract_with_pymupdf(pdf_path)
-                elif backend == "pdfplumber":
-                    text = self._extract_with_pdfplumber(pdf_path)
-                elif backend == "pypdf":
-                    text = self._extract_with_pypdf(pdf_path)
-                else:
-                    continue
-
-                if text:
-                    quality_score = self._assess_text_quality(text)
-                    results.append({
-                        "backend": backend,
-                        "text": text,
-                        "quality": quality_score,
-                        "length": len(text)
-                    })
-                    self.log_info(f"Backend {backend}: {len(text)} chars, quality={quality_score:.2f}")
-
-            except Exception as e:
-                self.log_warning(f"Backend {backend} failed: {e}")
-                continue
+            result = await self._try_backend_with_retry(pdf_path, backend, max_retries=2)
+            if result:
+                results.append(result)
+            else:
+                backend_errors[backend] = "Failed after retries"
 
         if not results:
             raise AgentError(create_error(
                 ErrorCategory.PARSING,
                 "All PDF extraction backends failed",
-                context={"tried_backends": self._pdf_backends, "pdf_path": pdf_path},
+                context={
+                    "tried_backends": self._pdf_backends,
+                    "pdf_path": pdf_path,
+                    "errors": backend_errors
+                },
                 suggestion="The PDF may be image-based (scanned), corrupted, or password-protected."
             ))
 
@@ -303,6 +290,68 @@ class PaperParserAgent(BaseAgent):
 
         self.log_info(f"Selected {best_result['backend']} extraction (quality={best_result['quality']:.2f})")
         return best_result["text"]
+
+    async def _try_backend_with_retry(
+        self,
+        pdf_path: str,
+        backend: str,
+        max_retries: int = 2
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try a PDF backend with retry logic.
+
+        Args:
+            pdf_path: Path to the PDF file
+            backend: Backend name (pymupdf, pdfplumber, pypdf)
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            Dict with extraction result or None if all attempts failed
+        """
+        import asyncio
+
+        last_error = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                if backend == "pymupdf":
+                    text = self._extract_with_pymupdf(pdf_path)
+                elif backend == "pdfplumber":
+                    text = self._extract_with_pdfplumber(pdf_path)
+                elif backend == "pypdf":
+                    text = self._extract_with_pypdf(pdf_path)
+                else:
+                    return None
+
+                if text:
+                    quality_score = self._assess_text_quality(text)
+                    self.log_info(
+                        f"Backend {backend}: {len(text)} chars, quality={quality_score:.2f}"
+                        f"{' (retry ' + str(attempt) + ')' if attempt > 0 else ''}"
+                    )
+                    return {
+                        "backend": backend,
+                        "text": text,
+                        "quality": quality_score,
+                        "length": len(text),
+                        "attempts": attempt + 1
+                    }
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 0.5 * (attempt + 1)  # Exponential backoff
+                    self.log_warning(
+                        f"Backend {backend} attempt {attempt + 1} failed: {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.log_warning(
+                        f"Backend {backend} failed after {max_retries + 1} attempts: {last_error}"
+                    )
+
+        return None
 
     def _assess_text_quality(self, text: str) -> float:
         """

@@ -317,12 +317,229 @@ async def get_knowledge_graph(job_id: str):
     """Get the knowledge graph data for visualization."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
+
     job = jobs[job_id]
     if job.result and "knowledge_graph" in job.result:
         return job.result["knowledge_graph"]
-    
+
     raise HTTPException(status_code=404, detail="Knowledge graph not available")
+
+
+@app.get("/api/jobs/{job_id}/knowledge-graph/search")
+async def search_knowledge_graph(
+    job_id: str,
+    query: str,
+    node_type: Optional[str] = None,
+    limit: int = 20
+):
+    """
+    Search nodes in the knowledge graph.
+
+    Args:
+        job_id: Job identifier
+        query: Search query (matches node names and descriptions)
+        node_type: Filter by node type (paper, concept, algorithm, function, class)
+        limit: Maximum results to return
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job = jobs[job_id]
+    if not job.result or "knowledge_graph" not in job.result:
+        raise HTTPException(status_code=404, detail="Knowledge graph not available")
+
+    kg_data = job.result["knowledge_graph"]
+    nodes = kg_data.get("nodes", [])
+
+    query_lower = query.lower()
+    results = []
+
+    for node in nodes:
+        if node_type and node.get("type", "").lower() != node_type.lower():
+            continue
+
+        label = node.get("label", "").lower()
+        description = str(node.get("description", "")).lower()
+
+        if query_lower in label or query_lower in description:
+            results.append(node)
+            if len(results) >= limit:
+                break
+
+    return {"query": query, "node_type": node_type, "count": len(results), "results": results}
+
+
+@app.get("/api/jobs/{job_id}/knowledge-graph/filter")
+async def filter_knowledge_graph(
+    job_id: str,
+    node_types: Optional[str] = None,
+    min_connections: int = 0,
+    include_isolated: bool = True
+):
+    """
+    Filter knowledge graph nodes.
+
+    Args:
+        job_id: Job identifier
+        node_types: Comma-separated list of node types to include
+        min_connections: Minimum number of connections a node must have
+        include_isolated: Whether to include nodes with no connections
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job = jobs[job_id]
+    if not job.result or "knowledge_graph" not in job.result:
+        raise HTTPException(status_code=404, detail="Knowledge graph not available")
+
+    kg_data = job.result["knowledge_graph"]
+    nodes = kg_data.get("nodes", [])
+    links = kg_data.get("links", [])
+
+    type_filter = set(node_types.split(",")) if node_types else None
+
+    # Count connections per node
+    connection_counts = {}
+    for link in links:
+        source = link.get("source") if isinstance(link.get("source"), str) else link.get("source", {}).get("id")
+        target = link.get("target") if isinstance(link.get("target"), str) else link.get("target", {}).get("id")
+        connection_counts[source] = connection_counts.get(source, 0) + 1
+        connection_counts[target] = connection_counts.get(target, 0) + 1
+
+    # Filter nodes
+    filtered_nodes = []
+    filtered_node_ids = set()
+
+    for node in nodes:
+        node_id = node.get("id")
+        node_type_val = node.get("type", "")
+        connections = connection_counts.get(node_id, 0)
+
+        if type_filter and node_type_val not in type_filter:
+            continue
+        if connections < min_connections:
+            if not include_isolated or connections > 0:
+                continue
+
+        filtered_nodes.append(node)
+        filtered_node_ids.add(node_id)
+
+    # Filter links
+    filtered_links = [
+        link for link in links
+        if (link.get("source") if isinstance(link.get("source"), str) else link.get("source", {}).get("id")) in filtered_node_ids
+        and (link.get("target") if isinstance(link.get("target"), str) else link.get("target", {}).get("id")) in filtered_node_ids
+    ]
+
+    return {"nodes": filtered_nodes, "links": filtered_links, "node_count": len(filtered_nodes), "link_count": len(filtered_links)}
+
+
+@app.get("/api/jobs/{job_id}/knowledge-graph/node/{node_id}")
+async def get_knowledge_graph_node(job_id: str, node_id: str, depth: int = 1):
+    """
+    Get a specific node and its neighbors up to specified depth.
+
+    Args:
+        job_id: Job identifier
+        node_id: Node ID to retrieve
+        depth: How many hops to include (1 = direct neighbors only)
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job = jobs[job_id]
+    if not job.result or "knowledge_graph" not in job.result:
+        raise HTTPException(status_code=404, detail="Knowledge graph not available")
+
+    kg_data = job.result["knowledge_graph"]
+    nodes = {n.get("id"): n for n in kg_data.get("nodes", [])}
+    links = kg_data.get("links", [])
+
+    if node_id not in nodes:
+        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+
+    # Build adjacency list
+    adjacency = {}
+    for link in links:
+        source = link.get("source") if isinstance(link.get("source"), str) else link.get("source", {}).get("id")
+        target = link.get("target") if isinstance(link.get("target"), str) else link.get("target", {}).get("id")
+        adjacency.setdefault(source, []).append({"node_id": target, "link": link})
+        adjacency.setdefault(target, []).append({"node_id": source, "link": link})
+
+    # BFS to find neighbors
+    visited = {node_id}
+    current_level = [node_id]
+    result_nodes = [nodes[node_id]]
+    result_links = []
+
+    for _ in range(depth):
+        next_level = []
+        for current_id in current_level:
+            for neighbor in adjacency.get(current_id, []):
+                neighbor_id = neighbor["node_id"]
+                if neighbor_id not in visited:
+                    visited.add(neighbor_id)
+                    next_level.append(neighbor_id)
+                    if neighbor_id in nodes:
+                        result_nodes.append(nodes[neighbor_id])
+                link = neighbor["link"]
+                source = link.get("source") if isinstance(link.get("source"), str) else link.get("source", {}).get("id")
+                target = link.get("target") if isinstance(link.get("target"), str) else link.get("target", {}).get("id")
+                if source in visited and target in visited and link not in result_links:
+                    result_links.append(link)
+        current_level = next_level
+
+    return {"center_node": nodes[node_id], "depth": depth, "nodes": result_nodes, "links": result_links, "neighbor_count": len(result_nodes) - 1}
+
+
+@app.get("/api/jobs/{job_id}/report/json")
+async def get_job_report_json(job_id: str):
+    """Get the report data as JSON."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job = jobs[job_id]
+    if not job.result:
+        raise HTTPException(status_code=404, detail="Job results not available")
+
+    return {
+        "job_id": job_id,
+        "generated_at": datetime.now().isoformat(),
+        "paper": job.result.get("paper"),
+        "repository": job.result.get("repository"),
+        "mappings": job.result.get("mappings"),
+        "code_results": job.result.get("code_results"),
+        "knowledge_graph": job.result.get("knowledge_graph"),
+        "errors": job.result.get("errors", [])
+    }
+
+
+@app.get("/api/jobs/{job_id}/report/markdown")
+async def get_job_report_markdown(job_id: str):
+    """Get the report as Markdown."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job = jobs[job_id]
+    if not job.result:
+        raise HTTPException(status_code=404, detail="Job results not available")
+
+    from reports.template_engine import ReportGenerator
+    report_gen = ReportGenerator()
+    markdown_content = report_gen.generate_markdown(
+        job_id=job_id,
+        paper_data=job.result.get("paper"),
+        repo_data=job.result.get("repository"),
+        mappings=job.result.get("mappings"),
+        code_results=job.result.get("code_results")
+    )
+
+    from fastapi.responses import Response
+    return Response(
+        content=markdown_content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f"attachment; filename=report_{job_id}.md"}
+    )
 
 
 @app.get("/api/jobs")

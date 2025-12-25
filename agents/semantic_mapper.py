@@ -22,18 +22,20 @@ from core.error_handling import logger, LogCategory
 class SemanticMapper(BaseAgent):
     """
     Maps paper concepts to their code implementations using multiple signals.
-    
+
     Signals used:
     1. Lexical matching - Name and terminology similarity
     2. Semantic similarity - Embedding-based similarity
     3. Structural patterns - Code structure matching algorithms
     4. Documentary evidence - Docstrings, comments mentioning paper
     """
-    
+
     def __init__(self, llm_client: LLMClient):
         super().__init__(llm_client, name="SemanticMapper")
         self._embedder = None
         self._embeddings_cache: Dict[str, List[float]] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
     
     def _init_embedder(self):
         """Initialize sentence transformer for embeddings."""
@@ -272,51 +274,85 @@ class SemanticMapper(BaseAgent):
         tokens = re.findall(r'\w+', text.lower())
         return tokens
     
+    def _get_embedding(self, text: str) -> Optional[List[float]]:
+        """Get embedding for text, using cache if available."""
+        if text in self._embeddings_cache:
+            self._cache_hits += 1
+            return self._embeddings_cache[text]
+
+        self._cache_misses += 1
+
+        if self._embedder is None:
+            return None
+
+        try:
+            embedding = self._embedder.encode(text).tolist()
+            self._embeddings_cache[text] = embedding
+            return embedding
+        except Exception:
+            return None
+
     async def _compute_semantic_similarity(
         self,
         concepts: List[Dict[str, Any]],
         code_elements: List[Dict[str, Any]]
     ) -> Dict[Tuple[str, str], float]:
-        """Compute semantic similarity using embeddings."""
+        """Compute semantic similarity using embeddings with caching."""
         scores = {}
-        
+
         self._init_embedder()
-        
+
         if self._embedder is None:
             return scores
-        
+
         try:
             import numpy as np
-            
-            # Prepare texts
-            concept_texts = [
-                f"{c['name']}: {c['description']}" for c in concepts
-            ]
-            element_texts = [
-                f"{e['name']}: {e['description']}" for e in code_elements
-            ]
-            
-            # Get embeddings
-            concept_embeddings = self._embedder.encode(concept_texts)
-            element_embeddings = self._embedder.encode(element_texts)
-            
+
+            # Prepare texts and get embeddings (with caching)
+            concept_embeddings = []
+            for c in concepts:
+                text = f"{c['name']}: {c['description']}"
+                emb = self._get_embedding(text)
+                if emb:
+                    concept_embeddings.append(np.array(emb))
+                else:
+                    concept_embeddings.append(None)
+
+            element_embeddings = []
+            for e in code_elements:
+                text = f"{e['name']}: {e['description']}"
+                emb = self._get_embedding(text)
+                if emb:
+                    element_embeddings.append(np.array(emb))
+                else:
+                    element_embeddings.append(None)
+
             # Compute similarities
             for i, concept in enumerate(concepts):
+                c_emb = concept_embeddings[i]
+                if c_emb is None:
+                    continue
+
                 for j, element in enumerate(code_elements):
-                    # Cosine similarity
-                    c_emb = concept_embeddings[i]
                     e_emb = element_embeddings[j]
-                    
+                    if e_emb is None:
+                        continue
+
+                    # Cosine similarity
                     similarity = np.dot(c_emb, e_emb) / (
                         np.linalg.norm(c_emb) * np.linalg.norm(e_emb) + 1e-8
                     )
-                    
+
                     key = (concept["name"], element["name"])
                     scores[key] = float(similarity)
-            
+
+            self.log_debug(
+                f"Embedding cache stats: {self._cache_hits} hits, {self._cache_misses} misses"
+            )
+
         except Exception as e:
             self.log_warning(f"Semantic similarity failed: {e}")
-        
+
         return scores
     
     async def _check_documentary_evidence(
@@ -465,43 +501,61 @@ class SemanticMapper(BaseAgent):
         semantic_scores: Dict[Tuple[str, str], float],
         documentary_scores: Dict[Tuple[str, str], float]
     ) -> List[Dict[str, Any]]:
-        """Fallback mapping using only pre-computed scores."""
+        """Fallback mapping using only pre-computed scores with adaptive weighting."""
         mappings = []
-        
+
+        # Check if we have semantic scores available
+        has_semantic = len(semantic_scores) > 0
+
         for concept in concepts:
             best_match = None
             best_score = 0
-            
+            best_signals = {}
+
             for element in code_elements:
                 key = (concept["name"], element["name"])
-                
+
                 lex = lexical_scores.get(key, 0)
                 sem = semantic_scores.get(key, 0)
                 doc = documentary_scores.get(key, 0)
-                
-                combined = (lex * 0.3 + sem * 0.4 + doc * 0.3)
-                
+
+                # Adaptive weighting based on signal availability
+                if has_semantic and sem > 0:
+                    # When semantic scores are available, weight them higher
+                    # Semantic similarity is most reliable for concept matching
+                    combined = (lex * 0.25 + sem * 0.50 + doc * 0.25)
+                else:
+                    # Without semantic, rely more on lexical and documentary
+                    combined = (lex * 0.5 + doc * 0.5)
+
+                # Boost if multiple signals agree
+                signals_agreeing = sum(1 for s in [lex, sem, doc] if s > 0.3)
+                if signals_agreeing >= 2:
+                    combined *= 1.1  # 10% boost for agreement
+
                 if combined > best_score:
                     best_score = combined
                     best_match = element
-            
+                    best_signals = {"lexical": lex, "semantic": sem, "documentary": doc}
+
             if best_match and best_score > 0.2:
                 key = (concept["name"], best_match["name"])
+
+                # Determine primary matching reason
+                signals = best_signals
+                primary_signal = max(signals.items(), key=lambda x: x[1])[0] if signals else "unknown"
+
                 mappings.append({
                     "concept_name": concept["name"],
                     "concept_description": concept["description"],
                     "code_element": best_match["name"],
                     "code_file": best_match["file_path"],
-                    "confidence": best_score,
-                    "match_signals": {
-                        "lexical": lexical_scores.get(key, 0),
-                        "semantic": semantic_scores.get(key, 0),
-                        "documentary": documentary_scores.get(key, 0)
-                    },
-                    "evidence": ["Automated matching based on similarity scores"],
-                    "reasoning": "Matched using lexical and semantic similarity"
+                    "confidence": min(1.0, best_score),
+                    "match_signals": signals,
+                    "evidence": [f"Primary signal: {primary_signal} ({signals.get(primary_signal, 0):.2f})"],
+                    "reasoning": f"Matched via {primary_signal} similarity (score: {best_score:.2f})"
                 })
-        
+
         return mappings
     
     async def _update_knowledge_graph(

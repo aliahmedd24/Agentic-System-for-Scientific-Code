@@ -25,6 +25,9 @@ from core.agent_prompts import (
 )
 from core.error_handling import logger, LogCategory
 from core.resource_estimator import estimate_resources
+from core.bubblewrap_sandbox import (
+    SandboxManager, SandboxConfig, ExecutionResult, IsolationLevel
+)
 
 
 # Supported languages and their configurations
@@ -82,6 +85,12 @@ class CodingAgent(BaseAgent):
         self.max_retries = max_retries
         self._docker_available = self._check_docker()
         self._sandbox_image = None
+
+        # Initialize SandboxManager for secure execution
+        self._sandbox_manager = SandboxManager()
+        self.log_info(
+            f"SandboxManager initialized with backends: {self._sandbox_manager.available_backends}"
+        )
     
     def _check_docker(self) -> bool:
         """Check if Docker is available."""
@@ -199,21 +208,29 @@ class CodingAgent(BaseAgent):
                     "Code may require more resources than available - proceeding anyway"
                 )
 
-        # Execute in sandbox
+        # Execute in sandbox using SandboxManager
         results = []
         if execute and scripts:
             output_dir = Path(tempfile.mkdtemp(prefix="validation_"))
             try:
-                if self._docker_available:
-                    results = await self._execute_in_docker_sandbox(
-                        scripts, repo_path, dependencies, output_dir
-                    )
-                else:
-                    results = await self._execute_in_venv_sandbox(
-                        scripts, repo_path, dependencies, output_dir
-                    )
+                # Use SandboxManager for secure execution with proper isolation
+                results = await self._execute_with_sandbox_manager(
+                    scripts, repo_path, dependencies, output_dir, resource_estimate
+                )
             except Exception as e:
                 self.log_error(f"Sandbox execution failed: {e}")
+                # Fallback to legacy execution methods if SandboxManager fails
+                try:
+                    if self._docker_available:
+                        results = await self._execute_in_docker_sandbox(
+                            scripts, repo_path, dependencies, output_dir
+                        )
+                    else:
+                        results = await self._execute_in_venv_sandbox(
+                            scripts, repo_path, dependencies, output_dir
+                        )
+                except Exception as fallback_error:
+                    self.log_error(f"Fallback execution also failed: {fallback_error}")
 
         return {
             "scripts": scripts,
@@ -711,7 +728,108 @@ class CodingAgent(BaseAgent):
         except Exception as e:
             self.log_error(f"Code generation failed: {e}")
             return ""
-    
+
+    async def _execute_with_sandbox_manager(
+        self,
+        scripts: List[Dict[str, Any]],
+        repo_path: str,
+        dependencies: Dict[str, Any],
+        output_dir: Path,
+        resource_estimate=None
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute tests using SandboxManager for proper isolation.
+
+        This method uses the unified SandboxManager which selects the best
+        available backend (QEMU > Bubblewrap > Docker > Subprocess).
+        """
+        results = []
+        language = dependencies.get("language", "python")
+
+        # Build SandboxConfig from resource estimate and dependencies
+        config = SandboxConfig(
+            language=language,
+            timeout_seconds=120,
+            network_enabled=False,
+        )
+
+        # Apply resource limits from estimate if available
+        if resource_estimate:
+            config.memory_limit_mb = int(resource_estimate.memory_gb * 1024)
+            config.cpu_limit = max(1.0, resource_estimate.complexity_score * 4)
+
+        # Add repo path as read-only for imports
+        if repo_path:
+            config.read_only_paths.append(repo_path)
+            config.env_vars["PYTHONPATH"] = repo_path
+
+        # Set up working directory
+        scripts_dir = output_dir / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        config.read_write_paths.append(str(scripts_dir))
+
+        self.log_info(
+            f"Executing {len(scripts)} scripts via SandboxManager "
+            f"(best backend: {self._sandbox_manager.best_backend})"
+        )
+
+        # Execute each script
+        for script in scripts:
+            if not script.get("syntax_valid", False):
+                results.append({
+                    "concept": script.get("concept"),
+                    "success": False,
+                    "error": "Syntax validation failed",
+                    "stdout": "",
+                    "stderr": script.get("syntax_error", ""),
+                    "execution_time": 0,
+                    "isolation_level": "none"
+                })
+                continue
+
+            script_code = script.get("code", "")
+            concept = script.get("concept", "unknown")
+
+            try:
+                # Execute using SandboxManager
+                exec_result: ExecutionResult = await self._sandbox_manager.execute_code(
+                    code=script_code,
+                    language=language,
+                    config=config
+                )
+
+                results.append({
+                    "concept": concept,
+                    "success": exec_result.success,
+                    "stdout": exec_result.stdout,
+                    "stderr": exec_result.stderr,
+                    "exit_code": exec_result.exit_code,
+                    "execution_time": exec_result.execution_time,
+                    "isolation_level": exec_result.isolation_level.value,
+                    "error": exec_result.error
+                })
+
+                if exec_result.success:
+                    self.log_info(f"Script for '{concept}' passed")
+                else:
+                    self.log_warning(
+                        f"Script for '{concept}' failed: {exec_result.error or exec_result.stderr[:200]}"
+                    )
+
+            except Exception as e:
+                self.log_error(f"Execution error for '{concept}': {e}")
+                results.append({
+                    "concept": concept,
+                    "success": False,
+                    "error": str(e),
+                    "stdout": "",
+                    "stderr": str(e),
+                    "execution_time": 0,
+                    "isolation_level": "none"
+                })
+
+        return results
+
     async def _execute_in_docker_sandbox(
         self,
         scripts: List[Dict[str, Any]],

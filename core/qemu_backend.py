@@ -322,15 +322,24 @@ class QEMUMonitor:
         while time.time() - start_time < timeout:
             try:
                 if sys.platform == "win32":
-                    # Windows named pipe or TCP
+                    # Windows: use TCP sockets (Unix sockets not supported)
                     if self.socket_path.startswith("tcp:"):
+                        # Explicit TCP format: tcp:host:port
                         host, port = self.socket_path[4:].split(":")
                         self._reader, self._writer = await asyncio.open_connection(
                             host, int(port)
                         )
                     else:
-                        # For Windows, we use TCP sockets
-                        raise NotImplementedError("Use TCP socket on Windows")
+                        # Convert Unix socket path to TCP localhost connection
+                        # Use a hash of the socket path to derive a consistent port
+                        import hashlib
+                        path_hash = int(hashlib.md5(self.socket_path.encode()).hexdigest()[:4], 16)
+                        tcp_port = 4444 + (path_hash % 1000)  # Port range 4444-5443
+                        logger.debug(f"Windows: Converting socket {self.socket_path} to TCP localhost:{tcp_port}",
+                                    category=LogCategory.SYSTEM)
+                        self._reader, self._writer = await asyncio.open_connection(
+                            "127.0.0.1", tcp_port
+                        )
                 else:
                     # Unix socket
                     self._reader, self._writer = await asyncio.open_unix_connection(
@@ -829,6 +838,80 @@ class QEMUVirtualMachine:
                 logger.warning(f"Failed to clean up runtime dir: {e}", category=LogCategory.SYSTEM)
             self._runtime_dir = None
 
+    async def reset(self) -> bool:
+        """
+        Reset VM state for reuse in a pool.
+
+        This restores the VM to a clean state by:
+        1. Loading a saved snapshot (if available)
+        2. Clearing the shared directory
+        3. Falling back to system reset if no snapshot
+
+        Returns:
+            True if reset successful, False otherwise
+        """
+        if self._state != VMState.RUNNING:
+            logger.warning(f"Cannot reset VM in state: {self._state}", category=LogCategory.SYSTEM)
+            return False
+
+        try:
+            # Clear shared directory if configured
+            if self.config.shared_dir:
+                shared_path = Path(self.config.shared_dir)
+                if shared_path.exists():
+                    for item in shared_path.iterdir():
+                        try:
+                            if item.is_file():
+                                item.unlink()
+                            elif item.is_dir():
+                                shutil.rmtree(item)
+                        except Exception as e:
+                            logger.warning(f"Failed to clear shared item {item}: {e}",
+                                         category=LogCategory.SYSTEM)
+
+            # Try to load a clean snapshot if the VM has one saved
+            # Note: This requires the VM to have been set up with a saved snapshot
+            if self._qmp and self._qmp._connected:
+                try:
+                    # Try to load the "clean" snapshot if it exists
+                    await self._qmp.loadvm("clean")
+                    logger.debug("VM reset via snapshot restore", category=LogCategory.SYSTEM)
+                    return True
+                except Exception:
+                    # No clean snapshot, fall back to system reset
+                    pass
+
+                # Fall back to system reset
+                await self._qmp.system_reset()
+                logger.debug("VM reset via system reset", category=LogCategory.SYSTEM)
+
+                # Wait a moment for the reset to complete
+                await asyncio.sleep(2.0)
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"VM reset failed: {e}", category=LogCategory.SYSTEM)
+            return False
+
+    async def save_clean_snapshot(self) -> bool:
+        """
+        Save a clean snapshot for later restoration.
+
+        Call this after VM is fully booted and ready to create a restore point.
+        """
+        if self._state != VMState.RUNNING or not self._qmp:
+            return False
+
+        try:
+            await self._qmp.savevm("clean")
+            logger.info("Saved clean VM snapshot", category=LogCategory.SYSTEM)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to save clean snapshot: {e}", category=LogCategory.SYSTEM)
+            return False
+
     async def execute_via_serial(
         self,
         command: str,
@@ -1061,6 +1144,8 @@ class QEMUPool:
             vm = QEMUVirtualMachine(vm_config, self.image_manager)
 
             if await vm.start():
+                # Save a clean snapshot for efficient resets
+                await vm.save_clean_snapshot()
                 self._available.append(vm)
             else:
                 logger.warning(f"Failed to start pool VM {i}", category=LogCategory.SYSTEM)
@@ -1096,8 +1181,19 @@ class QEMUPool:
 
             # Reset and return to pool if still healthy
             if vm.state == VMState.RUNNING:
-                # TODO: Reset VM state (restore snapshot, clear shared dir, etc.)
-                self._available.append(vm)
+                # Reset VM state (restore snapshot, clear shared dir, etc.)
+                if await vm.reset():
+                    self._available.append(vm)
+                    logger.debug(f"VM reset and returned to pool", category=LogCategory.SYSTEM)
+                else:
+                    # Reset failed, stop and recreate
+                    logger.warning("VM reset failed, recreating", category=LogCategory.SYSTEM)
+                    await vm.stop(force=True)
+                    new_vm = QEMUVirtualMachine(vm.config, self.image_manager)
+                    if await new_vm.start():
+                        # Save a clean snapshot for future resets
+                        await new_vm.save_clean_snapshot()
+                        self._available.append(new_vm)
             else:
                 # VM is unhealthy, stop it and create a new one
                 await vm.stop(force=True)
