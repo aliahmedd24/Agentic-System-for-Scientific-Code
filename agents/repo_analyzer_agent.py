@@ -256,7 +256,8 @@ class RepoAnalyzerAgent(BaseAgent):
                 
                 try:
                     size = file_path.stat().st_size
-                except:
+                except OSError:
+                    # File may be inaccessible or a broken symlink
                     size = 0
                 
                 structure["total_files"] += 1

@@ -287,8 +287,8 @@ class CodingAgent(BaseAgent):
                             pkg = line.split('==')[0].split('>=')[0].split('<=')[0].split('[')[0].strip()
                             if pkg and not pkg.startswith('git+'):
                                 deps["packages"].append(pkg)
-                except:
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    self.log_debug(f"Failed to parse {req_file}: {e}")
                 break
         
         # Check setup.py
@@ -307,8 +307,8 @@ class CodingAgent(BaseAgent):
                     import re
                     matches = re.findall(r'"([a-zA-Z0-9_-]+)', content)
                     deps["packages"].extend(matches[:20])
-            except:
-                pass
+            except (OSError, UnicodeDecodeError) as e:
+                self.log_debug(f"Failed to parse pyproject.toml: {e}")
         
         # Get from repo_data
         if repo_data and "dependencies" in repo_data:
@@ -342,8 +342,8 @@ class CodingAgent(BaseAgent):
                         pkg = line.split("=")[0].strip()
                         if pkg:
                             deps["packages"].append(pkg)
-            except:
-                pass
+            except (OSError, UnicodeDecodeError) as e:
+                self.log_debug(f"Failed to parse Julia Project.toml: {e}")
         
         return deps
     
@@ -367,8 +367,8 @@ class CodingAgent(BaseAgent):
                             pkg = pkg.strip().split("(")[0].strip()
                             if pkg and pkg != "R":
                                 deps["packages"].append(pkg)
-            except:
-                pass
+            except (OSError, UnicodeDecodeError) as e:
+                self.log_debug(f"Failed to parse R DESCRIPTION: {e}")
         
         # Check renv.lock
         renv_lock = repo_path / "renv.lock"
@@ -379,8 +379,8 @@ class CodingAgent(BaseAgent):
                 content = json.loads(renv_lock.read_text())
                 for pkg_name in content.get("Packages", {}).keys():
                     deps["packages"].append(pkg_name)
-            except:
-                pass
+            except (OSError, json.JSONDecodeError) as e:
+                self.log_debug(f"Failed to parse renv.lock: {e}")
         
         deps["packages"] = list(set(deps["packages"]))
         return deps
@@ -405,8 +405,9 @@ class CodingAgent(BaseAgent):
                 for pattern, toolbox in toolbox_patterns.items():
                     if pattern in content.lower():
                         deps["toolboxes"].append(toolbox)
-            except:
-                pass
+            except (OSError, UnicodeDecodeError):
+                # Skip files that can't be read
+                continue
         
         deps["toolboxes"] = list(set(deps["toolboxes"]))
         return deps

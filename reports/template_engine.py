@@ -724,8 +724,10 @@ class ReportGenerator:
         if knowledge_graph:
             try:
                 kg_data = knowledge_graph.to_d3_format()
-            except Exception:
-                pass
+            except Exception as e:
+                # Log but continue - report can still be generated without graph
+                import logging
+                logging.debug(f"Failed to generate knowledge graph D3 format: {e}")
         
         # Prepare template context
         context = {

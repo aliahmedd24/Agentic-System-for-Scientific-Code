@@ -130,7 +130,7 @@ class SubprocessBackend(SandboxBackend):
                 try:
                     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
                 except (ValueError, resource.error):
-                    pass
+                    pass  # May fail if limit already lower or unsupported
 
         return set_limits if sys.platform != "win32" else None
 

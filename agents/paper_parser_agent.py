@@ -143,8 +143,8 @@ class PaperParserAgent(BaseAgent):
         if pdf_path and Path(pdf_path).exists() and "temp" in str(pdf_path):
             try:
                 Path(pdf_path).unlink()
-            except:
-                pass
+            except OSError as e:
+                self.log_debug(f"Failed to clean up temp file {pdf_path}: {e}")
         
         return paper_data
     
