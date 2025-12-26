@@ -9,9 +9,12 @@ from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import ValidationError
 
 from .base_agent import BaseAgent
+from .protocols import PaperParserOutput
 from core.llm_client import LLMClient
+from core.schema_utils import generate_llm_schema
 from core.knowledge_graph import (
     KnowledgeGraph, NodeType, EdgeType,
     create_paper_node, create_concept_node
@@ -75,7 +78,7 @@ class PaperParserAgent(BaseAgent):
         *,
         paper_source: str,
         knowledge_graph: KnowledgeGraph = None
-    ) -> Dict[str, Any]:
+    ) -> PaperParserOutput:
         """
         Parse a scientific paper and extract structured information.
 
@@ -84,28 +87,28 @@ class PaperParserAgent(BaseAgent):
             knowledge_graph: Optional knowledge graph to populate
 
         Returns:
-            Dict with extracted paper information (PaperParserOutput)
+            PaperParserOutput with extracted paper information
         """
         if not paper_source:
             raise ValueError("paper_source is required")
         if knowledge_graph is None:
             knowledge_graph = KnowledgeGraph()
         return await self.parse(paper_source, knowledge_graph)
-    
+
     async def parse(
         self,
         paper_source: str,
         kg: KnowledgeGraph
-    ) -> Dict[str, Any]:
+    ) -> PaperParserOutput:
         """
         Parse a scientific paper and extract structured information.
-        
+
         Args:
             paper_source: arXiv ID, URL, or local file path
             kg: Knowledge graph to populate
-            
+
         Returns:
-            Dictionary with extracted paper information
+            PaperParserOutput with extracted paper information
         """
         self.log_info(f"Parsing paper: {paper_source}")
         
@@ -552,98 +555,104 @@ class PaperParserAgent(BaseAgent):
         self,
         text: str,
         metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    ) -> PaperParserOutput:
         """Use LLM to analyze paper and extract structured information."""
         # Use smart truncation instead of simple split
         text = self._smart_truncate(text, max_chars=50000)
 
         prompt = PAPER_PARSER_EXTRACTION_PROMPT.format(paper_text=text)
-        
+
+        # Generate schema appropriate for the LLM provider
+        provider_name = self.llm.config.provider.value
+        schema = generate_llm_schema(PaperParserOutput, provider_name)
+
         try:
-            result = await self.llm.generate_structured(
+            result_dict = await self.llm.generate_structured(
                 prompt,
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "authors": {"type": "array", "items": {"type": "string"}},
-                        "abstract": {"type": "string"},
-                        "key_concepts": {"type": "array"},
-                        "algorithms": {"type": "array"},
-                        "methodology": {"type": "object"},
-                        "reproducibility": {"type": "object"},
-                        "expected_implementations": {"type": "array"}
-                    }
-                },
+                schema=schema,
                 system_instruction=PAPER_PARSER_SYSTEM_PROMPT
             )
-            
-            # Merge with metadata
-            if metadata.get("title"):
-                result["title"] = result.get("title") or metadata["title"]
-            if metadata.get("authors"):
-                result["authors"] = result.get("authors") or metadata["authors"]
-            if metadata.get("abstract"):
-                result["abstract"] = result.get("abstract") or metadata["abstract"]
-            
-            result["source_metadata"] = metadata
-            
-            return result
-            
+
+            # Merge with metadata (prefer LLM results, fallback to metadata)
+            if metadata.get("title") and not result_dict.get("title"):
+                result_dict["title"] = metadata["title"]
+            if metadata.get("authors") and not result_dict.get("authors"):
+                result_dict["authors"] = metadata["authors"]
+            if metadata.get("abstract") and not result_dict.get("abstract"):
+                result_dict["abstract"] = metadata["abstract"]
+
+            # Build source metadata
+            result_dict["source_metadata"] = {
+                "source_type": metadata.get("source_type", ""),
+                "arxiv_id": metadata.get("arxiv_id"),
+                "url": metadata.get("url"),
+                "file_path": metadata.get("file_path"),
+                "extraction_date": metadata.get("extraction_date")
+            }
+
+            # Validate with Pydantic - raises ValidationError on failure
+            try:
+                output = PaperParserOutput.model_validate(result_dict)
+            except ValidationError as ve:
+                raise AgentError(create_error(
+                    ErrorCategory.VALIDATION,
+                    f"LLM output validation failed: {ve}",
+                    original_error=ve,
+                    recoverable=False,
+                    suggestion="LLM returned data that doesn't match expected schema"
+                ))
+
+            return output
+
+        except AgentError:
+            raise  # Re-raise AgentError as-is
         except Exception as e:
             self.log_error(f"LLM analysis failed: {e}")
-            # Return minimal structure with metadata
-            return {
-                "title": metadata.get("title", "Unknown"),
-                "authors": metadata.get("authors", []),
-                "abstract": metadata.get("abstract", ""),
-                "key_concepts": [],
-                "algorithms": [],
-                "methodology": {},
-                "reproducibility": {},
-                "expected_implementations": [],
-                "source_metadata": metadata,
-                "analysis_error": str(e)
-            }
+            raise AgentError(create_error(
+                ErrorCategory.LLM,
+                f"Paper analysis failed: {e}",
+                original_error=e,
+                recoverable=False
+            ))
     
     async def _populate_knowledge_graph(
         self,
-        paper_data: Dict[str, Any],
+        paper_data: PaperParserOutput,
         kg: KnowledgeGraph
     ):
         """Add paper information to knowledge graph."""
         # Create paper node
         paper_id = create_paper_node(
             kg,
-            paper_data.get("title", "Unknown Paper"),
-            abstract=paper_data.get("abstract", ""),
-            authors=paper_data.get("authors", []),
-            source=paper_data.get("source_metadata", {})
+            paper_data.title,
+            abstract=paper_data.abstract,
+            authors=paper_data.authors,
+            source=paper_data.source_metadata.model_dump() if paper_data.source_metadata else {}
         )
-        
+
         # Create concept nodes
-        for concept in paper_data.get("key_concepts", []):
+        for concept in paper_data.key_concepts:
             concept_id = create_concept_node(
                 kg,
-                concept.get("name", ""),
-                description=concept.get("description", ""),
-                importance=concept.get("importance", "medium"),
-                related_sections=concept.get("related_sections", [])
+                concept.name,
+                description=concept.description,
+                importance=concept.importance,
+                related_sections=concept.related_sections
             )
             kg.add_edge(paper_id, concept_id, EdgeType.CONTAINS)
-        
+
         # Create algorithm nodes
-        for algo in paper_data.get("algorithms", []):
+        for algo in paper_data.algorithms:
             algo_id = kg.add_node(
                 type=NodeType.ALGORITHM,
-                name=algo.get("name", ""),
-                description=algo.get("description", ""),
+                name=algo.name,
+                description=algo.description,
                 metadata={
-                    "complexity": algo.get("complexity"),
-                    "pseudocode": algo.get("pseudocode_summary")
+                    "complexity": algo.complexity,
+                    "pseudocode": algo.pseudocode
                 }
             )
             kg.add_edge(paper_id, algo_id, EdgeType.CONTAINS)
-        
-        paper_data["_kg_paper_id"] = paper_id
+
+        paper_data._kg_paper_id = paper_id
         self.log_info(f"Added {kg.get_statistics()['total_nodes']} nodes to knowledge graph")

@@ -3,11 +3,18 @@ Semantic Mapper - Maps paper concepts to code implementations.
 """
 
 import re
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 from difflib import SequenceMatcher
+from pydantic import ValidationError
 
 from .base_agent import BaseAgent
+from .protocols import (
+    SemanticMapperOutput, MappingResult, MatchSignals,
+    PaperParserOutput, RepoAnalyzerOutput
+)
 from core.llm_client import LLMClient
+from core.schema_utils import generate_llm_schema
 from core.knowledge_graph import (
     KnowledgeGraph, NodeType, EdgeType,
     create_mapping_node
@@ -16,7 +23,7 @@ from core.agent_prompts import (
     SEMANTIC_MAPPER_SYSTEM_PROMPT,
     SEMANTIC_MAPPER_PROMPT
 )
-from core.error_handling import logger, LogCategory
+from core.error_handling import logger, LogCategory, ErrorCategory, create_error, AgentError
 
 
 class SemanticMapper(BaseAgent):
@@ -53,20 +60,20 @@ class SemanticMapper(BaseAgent):
     async def process(
         self,
         *,
-        paper_data: Dict[str, Any],
-        repo_data: Dict[str, Any],
+        paper_data: Any,
+        repo_data: Any,
         knowledge_graph: KnowledgeGraph = None
-    ) -> Dict[str, Any]:
+    ) -> SemanticMapperOutput:
         """
         Map paper concepts to code implementations.
 
         Args:
-            paper_data: Extracted paper information (REQUIRED)
-            repo_data: Analyzed repository data (REQUIRED)
+            paper_data: Extracted paper information (REQUIRED) - PaperParserOutput or dict
+            repo_data: Analyzed repository data (REQUIRED) - RepoAnalyzerOutput or dict
             knowledge_graph: Optional knowledge graph to populate
 
         Returns:
-            Dict with mappings list (SemanticMapperOutput)
+            SemanticMapperOutput with mappings list
         """
         if not paper_data:
             raise ValueError("paper_data is required")
@@ -75,24 +82,24 @@ class SemanticMapper(BaseAgent):
         if knowledge_graph is None:
             knowledge_graph = KnowledgeGraph()
         mappings = await self.map_concepts(paper_data, repo_data, knowledge_graph)
-        return {"mappings": mappings}
-    
+        return SemanticMapperOutput(mappings=mappings)
+
     async def map_concepts(
         self,
-        paper_data: Optional[Dict[str, Any]],
-        repo_data: Optional[Dict[str, Any]],
+        paper_data: Any,
+        repo_data: Any,
         kg: KnowledgeGraph
-    ) -> List[Dict[str, Any]]:
+    ) -> List[MappingResult]:
         """
         Map paper concepts to code elements.
-        
+
         Args:
-            paper_data: Extracted paper information
-            repo_data: Analyzed repository data
+            paper_data: Extracted paper information (PaperParserOutput or dict)
+            repo_data: Analyzed repository data (RepoAnalyzerOutput or dict)
             kg: Knowledge graph
-            
+
         Returns:
-            List of concept-code mappings with confidence scores
+            List of MappingResult objects with confidence scores
         """
         self.log_info("Starting concept-code mapping")
         
@@ -146,48 +153,79 @@ class SemanticMapper(BaseAgent):
         
         return mappings
     
-    def _extract_concepts(self, paper_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract concepts from paper data."""
+    def _extract_concepts(self, paper_data: Any) -> List[Dict[str, Any]]:
+        """Extract concepts from paper data (supports both Pydantic and dict)."""
         concepts = []
-        
-        # Key concepts
-        for concept in paper_data.get("key_concepts", []):
-            concepts.append({
-                "name": concept.get("name", ""),
-                "description": concept.get("description", ""),
-                "type": "concept",
-                "importance": concept.get("importance", "medium")
-            })
-        
-        # Algorithms
-        for algo in paper_data.get("algorithms", []):
-            concepts.append({
-                "name": algo.get("name", ""),
-                "description": algo.get("description", ""),
-                "type": "algorithm",
-                "importance": "high"
-            })
-        
-        # Expected implementations
-        for impl in paper_data.get("expected_implementations", []):
-            concepts.append({
-                "name": impl.get("component", ""),
-                "description": impl.get("description", ""),
-                "type": "implementation",
-                "importance": "high",
-                "likely_names": impl.get("likely_function_names", [])
-            })
-        
+
+        # Handle both Pydantic PaperParserOutput and dict
+        if isinstance(paper_data, PaperParserOutput):
+            # Pydantic object - use attribute access
+            for concept in paper_data.key_concepts:
+                concepts.append({
+                    "name": concept.name,
+                    "description": concept.description,
+                    "type": "concept",
+                    "importance": concept.importance
+                })
+
+            for algo in paper_data.algorithms:
+                concepts.append({
+                    "name": algo.name,
+                    "description": algo.description,
+                    "type": "algorithm",
+                    "importance": "high"
+                })
+
+            for impl in paper_data.expected_implementations:
+                concepts.append({
+                    "name": impl.component_name,
+                    "description": impl.description,
+                    "type": "implementation",
+                    "importance": "high",
+                    "likely_names": []
+                })
+        else:
+            # Dict - use get() access for backward compatibility
+            for concept in paper_data.get("key_concepts", []):
+                concepts.append({
+                    "name": concept.get("name", ""),
+                    "description": concept.get("description", ""),
+                    "type": "concept",
+                    "importance": concept.get("importance", "medium")
+                })
+
+            for algo in paper_data.get("algorithms", []):
+                concepts.append({
+                    "name": algo.get("name", ""),
+                    "description": algo.get("description", ""),
+                    "type": "algorithm",
+                    "importance": "high"
+                })
+
+            for impl in paper_data.get("expected_implementations", []):
+                concepts.append({
+                    "name": impl.get("component", impl.get("component_name", "")),
+                    "description": impl.get("description", ""),
+                    "type": "implementation",
+                    "importance": "high",
+                    "likely_names": impl.get("likely_function_names", [])
+                })
+
         # Filter empty concepts
         concepts = [c for c in concepts if c["name"]]
-        
+
         return concepts
     
-    def _extract_code_elements(self, repo_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract code elements from repo data."""
+    def _extract_code_elements(self, repo_data: Any) -> List[Dict[str, Any]]:
+        """Extract code elements from repo data (supports both Pydantic and dict)."""
         elements = []
-        code_data = repo_data.get("_code_elements", {})
-        
+
+        # Get code elements - handle both Pydantic and dict
+        if isinstance(repo_data, RepoAnalyzerOutput):
+            code_data = repo_data._code_elements or {}
+        else:
+            code_data = repo_data.get("_code_elements", {})
+
         # Classes
         for cls in code_data.get("classes", []):
             elements.append({
@@ -198,7 +236,7 @@ class SemanticMapper(BaseAgent):
                 "methods": cls.get("methods", []),
                 "signature": f"class {cls.get('name', '')}",
             })
-        
+
         # Functions
         for func in code_data.get("functions", []):
             args = func.get("args", [])
@@ -210,10 +248,10 @@ class SemanticMapper(BaseAgent):
                 "description": func.get("docstring", ""),
                 "signature": signature,
             })
-        
+
         # Filter empty elements
         elements = [e for e in elements if e["name"]]
-        
+
         return elements
     
     async def _compute_lexical_similarity(
@@ -407,13 +445,13 @@ class SemanticMapper(BaseAgent):
         lexical_scores: Dict[Tuple[str, str], float],
         semantic_scores: Dict[Tuple[str, str], float],
         documentary_scores: Dict[Tuple[str, str], float]
-    ) -> List[Dict[str, Any]]:
+    ) -> List[MappingResult]:
         """Use LLM for final mapping with reasoning."""
         # Prepare concepts summary
         concepts_text = ""
         for c in concepts[:20]:  # Limit
             concepts_text += f"- {c['name']} ({c['type']}): {c['description'][:200]}\n"
-        
+
         # Prepare code elements summary with pre-computed scores
         elements_text = ""
         for e in code_elements[:50]:  # Limit
@@ -427,71 +465,84 @@ class SemanticMapper(BaseAgent):
                 combined = max(lex, sem, doc)
                 if combined > 0.2:
                     best_scores.append((c["name"], lex, sem, doc))
-            
+
             score_hint = ""
             if best_scores:
                 best = max(best_scores, key=lambda x: max(x[1], x[2], x[3]))
                 score_hint = f" [potential match: {best[0]}]"
-            
+
             elements_text += f"- {e['name']} ({e['type']} in {e['file_path']}): {e['description'][:150]}{score_hint}\n"
-        
+
         prompt = SEMANTIC_MAPPER_PROMPT.format(
             concepts=concepts_text,
             code_elements=elements_text
         )
-        
+
+        # Generate schema appropriate for the LLM provider
+        provider_name = self.llm.config.provider.value
+        schema = generate_llm_schema(SemanticMapperOutput, provider_name)
+
         try:
-            result = await self.llm.generate_structured(
+            result_dict = await self.llm.generate_structured(
                 prompt,
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "mappings": {"type": "array"},
-                        "unmapped_concepts": {"type": "array"},
-                        "unmapped_code": {"type": "array"}
-                    }
-                },
+                schema=schema,
                 system_instruction=SEMANTIC_MAPPER_SYSTEM_PROMPT
             )
-            
-            mappings = result.get("mappings", [])
-            
-            # Enhance mappings with pre-computed scores
-            for mapping in mappings:
+
+            # Enhance mappings with pre-computed scores before validation
+            raw_mappings = result_dict.get("mappings", [])
+            for mapping in raw_mappings:
                 concept_name = mapping.get("concept_name", "")
                 code_name = mapping.get("code_element", "")
                 key = (concept_name, code_name)
-                
+
                 # Add match signals if not present
                 if "match_signals" not in mapping:
                     mapping["match_signals"] = {}
-                
+
                 mapping["match_signals"]["lexical"] = lexical_scores.get(key, 0)
                 mapping["match_signals"]["semantic"] = semantic_scores.get(key, 0)
                 mapping["match_signals"]["documentary"] = documentary_scores.get(key, 0)
-                
+
                 # Ensure confidence is reasonable
-                if "confidence" not in mapping:
+                if "confidence" not in mapping or mapping["confidence"] == 0:
                     signals = mapping["match_signals"]
                     mapping["confidence"] = max(
-                        signals["lexical"],
-                        signals["semantic"],
-                        signals["documentary"]
+                        signals.get("lexical", 0),
+                        signals.get("semantic", 0),
+                        signals.get("documentary", 0),
+                        0.1  # Minimum confidence
                     )
-            
+
+            # Validate with Pydantic
+            try:
+                output = SemanticMapperOutput.model_validate(result_dict)
+            except ValidationError as ve:
+                raise AgentError(create_error(
+                    ErrorCategory.VALIDATION,
+                    f"LLM output validation failed: {ve}",
+                    original_error=ve,
+                    recoverable=False,
+                    suggestion="LLM returned data that doesn't match expected schema"
+                ))
+
             # Sort by confidence
-            mappings.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-            
-            self.log_info(f"Generated {len(mappings)} mappings")
-            
-            return mappings
-            
+            sorted_mappings = sorted(output.mappings, key=lambda x: x.confidence, reverse=True)
+
+            self.log_info(f"Generated {len(sorted_mappings)} mappings")
+
+            return sorted_mappings
+
+        except AgentError:
+            raise  # Re-raise AgentError as-is
         except Exception as e:
             self.log_error(f"LLM mapping failed: {e}")
-            return self._fallback_mapping(
-                concepts, code_elements,
-                lexical_scores, semantic_scores, documentary_scores
-            )
+            raise AgentError(create_error(
+                ErrorCategory.LLM,
+                f"Semantic mapping failed: {e}",
+                original_error=e,
+                recoverable=False
+            ))
     
     def _fallback_mapping(
         self,
@@ -500,7 +551,7 @@ class SemanticMapper(BaseAgent):
         lexical_scores: Dict[Tuple[str, str], float],
         semantic_scores: Dict[Tuple[str, str], float],
         documentary_scores: Dict[Tuple[str, str], float]
-    ) -> List[Dict[str, Any]]:
+    ) -> List[MappingResult]:
         """Fallback mapping using only pre-computed scores with adaptive weighting."""
         mappings = []
 
@@ -539,28 +590,30 @@ class SemanticMapper(BaseAgent):
                     best_signals = {"lexical": lex, "semantic": sem, "documentary": doc}
 
             if best_match and best_score > 0.2:
-                key = (concept["name"], best_match["name"])
-
                 # Determine primary matching reason
                 signals = best_signals
                 primary_signal = max(signals.items(), key=lambda x: x[1])[0] if signals else "unknown"
 
-                mappings.append({
-                    "concept_name": concept["name"],
-                    "concept_description": concept["description"],
-                    "code_element": best_match["name"],
-                    "code_file": best_match["file_path"],
-                    "confidence": min(1.0, best_score),
-                    "match_signals": signals,
-                    "evidence": [f"Primary signal: {primary_signal} ({signals.get(primary_signal, 0):.2f})"],
-                    "reasoning": f"Matched via {primary_signal} similarity (score: {best_score:.2f})"
-                })
+                mappings.append(MappingResult(
+                    concept_name=concept["name"],
+                    concept_description=concept["description"],
+                    code_element=best_match["name"],
+                    code_file=best_match["file_path"],
+                    confidence=min(1.0, best_score),
+                    match_signals=MatchSignals(
+                        lexical=signals.get("lexical", 0),
+                        semantic=signals.get("semantic", 0),
+                        documentary=signals.get("documentary", 0)
+                    ),
+                    evidence=[f"Primary signal: {primary_signal} ({signals.get(primary_signal, 0):.2f})"],
+                    reasoning=f"Matched via {primary_signal} similarity (score: {best_score:.2f})"
+                ))
 
         return mappings
     
     async def _update_knowledge_graph(
         self,
-        mappings: List[Dict[str, Any]],
+        mappings: List[MappingResult],
         kg: KnowledgeGraph
     ):
         """Add mappings to knowledge graph."""
@@ -569,27 +622,27 @@ class SemanticMapper(BaseAgent):
         algo_nodes = kg.get_nodes_by_type(NodeType.ALGORITHM)
         function_nodes = kg.get_nodes_by_type(NodeType.FUNCTION)
         class_nodes = kg.get_nodes_by_type(NodeType.CLASS)
-        
+
         concept_map = {n.name.lower(): n.id for n in concept_nodes + algo_nodes}
         code_map = {n.name.lower(): n.id for n in function_nodes + class_nodes}
-        
+
         for mapping in mappings:
-            concept_name = mapping.get("concept_name", "").lower()
-            code_name = mapping.get("code_element", "").lower()
-            
+            concept_name = mapping.concept_name.lower()
+            code_name = mapping.code_element.lower()
+
             concept_id = concept_map.get(concept_name)
             code_id = code_map.get(code_name)
-            
+
             if concept_id and code_id:
                 try:
                     create_mapping_node(
                         kg,
                         concept_id,
                         code_id,
-                        confidence=mapping.get("confidence", 0),
-                        evidence=mapping.get("evidence", [])
+                        confidence=mapping.confidence,
+                        evidence=mapping.evidence
                     )
                 except Exception as e:
                     self.log_warning(f"Failed to create mapping node: {e}")
-        
+
         self.log_info(f"Knowledge graph now has {kg.get_statistics()['total_nodes']} nodes")

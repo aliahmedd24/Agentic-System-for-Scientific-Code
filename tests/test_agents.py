@@ -97,74 +97,101 @@ class TestPaperParserAgent:
 
 class TestRepoAnalyzerAgent:
     """Tests for RepoAnalyzerAgent."""
-    
+
     @pytest.fixture
     def repo_analyzer(self, mock_llm_client):
         """Create a repo analyzer agent for testing."""
         return RepoAnalyzerAgent(llm_client=mock_llm_client)
-    
+
     def test_agent_creation(self, repo_analyzer):
         """Test repo analyzer agent creation."""
         assert repo_analyzer is not None
-        assert repo_analyzer.agent_id == "repo_analyzer"
-    
-    def test_should_skip_path(self, repo_analyzer):
-        """Test path skipping logic."""
-        # Should skip
-        assert repo_analyzer._should_skip_path(Path(".git"))
-        assert repo_analyzer._should_skip_path(Path("node_modules"))
-        assert repo_analyzer._should_skip_path(Path("__pycache__"))
-        assert repo_analyzer._should_skip_path(Path(".venv"))
-        
-        # Should not skip
-        assert not repo_analyzer._should_skip_path(Path("src"))
-        assert not repo_analyzer._should_skip_path(Path("model.py"))
-        assert not repo_analyzer._should_skip_path(Path("tests"))
-    
-    def test_is_python_file(self, repo_analyzer):
-        """Test Python file detection."""
-        assert repo_analyzer._is_python_file(Path("model.py"))
-        assert repo_analyzer._is_python_file(Path("src/utils.py"))
-        
-        assert not repo_analyzer._is_python_file(Path("config.json"))
-        assert not repo_analyzer._is_python_file(Path("README.md"))
-    
+        assert repo_analyzer.agent_id == "repoanalyzer"
+
+    def test_agent_creation_with_custom_params(self, mock_llm_client):
+        """Test repo analyzer with custom parallel parsing parameters."""
+        agent = RepoAnalyzerAgent(
+            llm_client=mock_llm_client,
+            max_files=100,
+            batch_size=10,
+            max_workers=4
+        )
+        assert agent._max_files == 100
+        assert agent._batch_size == 10
+        assert agent._max_workers == 4
+
+    def test_default_parallel_config(self, repo_analyzer):
+        """Test default parallel parsing configuration."""
+        assert repo_analyzer._max_files == RepoAnalyzerAgent.DEFAULT_MAX_FILES
+        assert repo_analyzer._batch_size == RepoAnalyzerAgent.DEFAULT_BATCH_SIZE
+        assert repo_analyzer._max_workers == RepoAnalyzerAgent.DEFAULT_MAX_WORKERS
+
+    def test_prioritize_files(self, repo_analyzer):
+        """Test file prioritization for parsing."""
+        files = [
+            {"path": "tests/test_main.py"},
+            {"path": "model.py"},
+            {"path": "train.py"},
+            {"path": "utils/helpers.py"},
+            {"path": "core/network.py"},
+        ]
+
+        prioritized = repo_analyzer._prioritize_files(files)
+
+        # model.py and train.py should be ranked higher than test files
+        paths = [f["path"] for f in prioritized]
+        model_idx = paths.index("model.py")
+        train_idx = paths.index("train.py")
+        test_idx = paths.index("tests/test_main.py")
+
+        assert model_idx < test_idx
+        assert train_idx < test_idx
+
     @pytest.mark.asyncio
     async def test_scan_structure(self, repo_analyzer, temp_repo_dir):
         """Test repository structure scanning."""
         structure = await repo_analyzer._scan_structure(temp_repo_dir)
-        
+
         assert "files" in structure
         assert "directories" in structure
-        assert "extensions" in structure
+        assert "file_counts" in structure
+        assert "code_files" in structure
         assert len(structure["files"]) > 0
-    
+
     @pytest.mark.asyncio
-    async def test_parse_python_file(self, repo_analyzer, temp_repo_dir):
-        """Test Python file parsing."""
-        model_file = temp_repo_dir / "model.py"
-        
-        result = await repo_analyzer._parse_python_file(model_file)
-        
-        assert "classes" in result
-        assert "functions" in result
-        assert "imports" in result
-        
-        # Should find TransformerNet and MultiHeadAttention classes
-        class_names = [c["name"] for c in result["classes"]]
-        assert "TransformerNet" in class_names
-        assert "MultiHeadAttention" in class_names
-    
+    async def test_extract_code_elements_parallel(self, repo_analyzer, temp_repo_dir):
+        """Test parallel code element extraction."""
+        structure = await repo_analyzer._scan_structure(temp_repo_dir)
+
+        elements = await repo_analyzer._extract_code_elements(
+            temp_repo_dir,
+            structure,
+            max_files=50,
+            batch_size=5,
+            max_workers=2
+        )
+
+        assert "classes" in elements
+        assert "functions" in elements
+        assert "imports" in elements
+        assert "_parse_stats" in elements
+
+        # Verify parse stats are tracked
+        stats = elements["_parse_stats"]
+        assert "files_parsed" in stats
+        assert "batch_size" in stats
+        assert stats["batch_size"] == 5
+
     @pytest.mark.asyncio
     async def test_process_local_repo(self, repo_analyzer, temp_repo_dir, knowledge_graph):
         """Test processing a local repository."""
         result = await repo_analyzer.process(
-            repo_path=str(temp_repo_dir),
+            repo_url=str(temp_repo_dir),
             knowledge_graph=knowledge_graph
         )
-        
+
         assert result is not None
-        assert "structure" in result or "error" in result
+        assert "_structure" in result or "error" in result
 
 
 class TestSemanticMapper:
@@ -373,7 +400,7 @@ class TestAgentIntegration:
         # Analyze repo
         analyzer = RepoAnalyzerAgent(llm_client=mock_llm_client)
         repo_result = await analyzer.process(
-            repo_path=str(temp_repo_dir),
+            repo_url=str(temp_repo_dir),
             knowledge_graph=knowledge_graph
         )
         

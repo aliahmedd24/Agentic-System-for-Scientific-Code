@@ -13,9 +13,13 @@ import tempfile
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base_agent import BaseAgent
+from .protocols import (
+    MappingResult, RepoAnalyzerOutput,
+    CodingAgentOutput, GeneratedScript, TestResult, ExecutionSummary
+)
 from core.llm_client import LLMClient
 from core.knowledge_graph import KnowledgeGraph, NodeType, EdgeType
 from core.agent_prompts import (
@@ -144,32 +148,36 @@ class CodingAgent(BaseAgent):
     async def process(
         self,
         *,
-        mappings: List[Dict[str, Any]],
-        repo_data: Dict[str, Any],
+        mappings: List[MappingResult],
+        repo_data: Any,
         knowledge_graph: KnowledgeGraph = None,
         execute: bool = True
-    ) -> Dict[str, Any]:
+    ) -> CodingAgentOutput:
         """
         Generate and execute validation tests for paper concepts.
 
         Args:
-            mappings: Concept-to-code mappings (REQUIRED)
-            repo_data: Repository analysis data (REQUIRED)
+            mappings: Concept-to-code mappings (REQUIRED) - List[MappingResult]
+            repo_data: Repository analysis data (REQUIRED) - RepoAnalyzerOutput or dict
             knowledge_graph: Optional knowledge graph
             execute: Whether to execute generated tests (default True)
 
         Returns:
-            Dict with scripts, results, and language (CodingAgentOutput)
+            CodingAgentOutput with scripts, results, and language
         """
         if not mappings:
             self.log_warning("No mappings provided for code generation")
-            return {"scripts": [], "results": [], "language": "python"}
+            return CodingAgentOutput(scripts=[], results=[], language="python")
         if not repo_data:
             raise ValueError("repo_data is required")
         if knowledge_graph is None:
             knowledge_graph = KnowledgeGraph()
 
-        repo_path = repo_data.get("_repo_path", "")
+        # Get repo path - handle both Pydantic and dict
+        if isinstance(repo_data, RepoAnalyzerOutput):
+            repo_path = repo_data._repo_path or ""
+        else:
+            repo_path = repo_data.get("_repo_path", "")
 
         # Detect primary language
         language = self._detect_primary_language(repo_path, repo_data)
@@ -185,7 +193,7 @@ class CodingAgent(BaseAgent):
         resource_estimate = None
         if scripts:
             # Combine all script code for resource estimation
-            all_code = "\n".join(script.get("code", "") for script in scripts)
+            all_code = "\n".join(script.code for script in scripts)
             resource_estimate = estimate_resources(code=all_code)
 
             # Log resource warnings
@@ -209,7 +217,7 @@ class CodingAgent(BaseAgent):
                 )
 
         # Execute in sandbox using SandboxManager
-        results = []
+        results: List[TestResult] = []
         if execute and scripts:
             output_dir = Path(tempfile.mkdtemp(prefix="validation_"))
             try:
@@ -232,12 +240,22 @@ class CodingAgent(BaseAgent):
                 except Exception as fallback_error:
                     self.log_error(f"Fallback execution also failed: {fallback_error}")
 
-        return {
-            "scripts": scripts,
-            "results": results,
-            "language": language,
-            "resource_estimate": resource_estimate.to_dict() if resource_estimate else None
-        }
+        # Build execution summary
+        summary = ExecutionSummary(
+            total_tests=len(results),
+            passed=sum(1 for r in results if r.success),
+            failed=sum(1 for r in results if not r.success),
+            skipped=0,
+            total_time=sum(r.execution_time for r in results)
+        )
+
+        return CodingAgentOutput(
+            scripts=scripts,
+            results=results,
+            language=language,
+            summary=summary,
+            resource_estimate=None  # TODO: Convert resource_estimate to Pydantic
+        )
     
     async def _parse_repo_dependencies(
         self, 
@@ -416,19 +434,26 @@ class CodingAgent(BaseAgent):
     
     async def generate_tests(
         self,
-        mappings: Optional[List[Dict[str, Any]]],
-        repo_data: Optional[Dict[str, Any]],
+        mappings: List[MappingResult],
+        repo_data: Any,
         kg: KnowledgeGraph,
         dependencies: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    ) -> List[GeneratedScript]:
         """Generate validation test scripts for concept-code mappings."""
         if not mappings:
             self.log_warning("No mappings provided for code generation")
             return []
 
-        generated_tests = []
-        repo_path = repo_data.get("_repo_path", "") if repo_data else ""
-        repo_name = repo_data.get("name", "repo") if repo_data else "repo"
+        generated_tests: List[GeneratedScript] = []
+
+        # Get repo path and name - handle both Pydantic and dict
+        if isinstance(repo_data, RepoAnalyzerOutput):
+            repo_path = repo_data._repo_path or ""
+            repo_name = repo_data.name or "repo"
+        else:
+            repo_path = repo_data.get("_repo_path", "") if repo_data else ""
+            repo_name = repo_data.get("name", "repo") if repo_data else "repo"
+
         language = dependencies.get("language", "python")
 
         # Get file extension for this language
@@ -441,20 +466,20 @@ class CodingAgent(BaseAgent):
         ext = extensions.get(language, ".py")
 
         # Get mappings - prefer high-confidence but fall back to any
-        high_confidence = [m for m in mappings if m.get("confidence", 0) >= 0.3]
+        high_confidence = [m for m in mappings if m.confidence >= 0.3]
         if not high_confidence:
-            high_confidence = sorted(mappings, key=lambda x: x.get("confidence", 0), reverse=True)
+            high_confidence = sorted(mappings, key=lambda x: x.confidence, reverse=True)
         high_confidence = high_confidence[:5]
 
         self.log_info(f"Generating {language} tests for {len(high_confidence)} mappings")
 
         for i, mapping in enumerate(high_confidence):
-            concept_name = mapping.get("concept_name", "Unknown")
+            concept_name = mapping.concept_name
             self.log_info(f"Generating test {i+1}/{len(high_confidence)}: {concept_name}")
 
             try:
-                code_file = mapping.get("code_file", "")
-                code_element = mapping.get("code_element", "")
+                code_file = mapping.code_file
+                code_element = mapping.code_element
                 actual_code = await self._extract_code_context(repo_path, code_file, code_element)
 
                 # Compute correct import path
@@ -481,19 +506,19 @@ class CodingAgent(BaseAgent):
                             test_code, language, repo_path, code_file
                         )
 
-                    generated_tests.append({
-                        "concept": concept_name,
-                        "code_element": code_element,
-                        "code_file": code_file,
-                        "confidence": mapping.get("confidence", 0),
-                        "code": test_code,
-                        "syntax_valid": validation_result["syntax_valid"],
-                        "import_valid": validation_result.get("import_valid", True),
-                        "validation_error": validation_result.get("error"),
-                        "file_name": f"test_{i+1}_{self._safe_filename(concept_name)}{ext}",
-                        "language": language,
-                        "import_path": import_info.get("import_statement", "")
-                    })
+                    generated_tests.append(GeneratedScript(
+                        concept=concept_name,
+                        code_element=code_element,
+                        code_file=code_file,
+                        confidence=mapping.confidence,
+                        code=test_code,
+                        syntax_valid=validation_result["syntax_valid"],
+                        import_valid=validation_result.get("import_valid", True),
+                        validation_error=validation_result.get("error"),
+                        file_name=f"test_{i+1}_{self._safe_filename(concept_name)}{ext}",
+                        language=language,
+                        import_path=import_info.get("import_statement", "")
+                    ))
 
             except Exception as e:
                 self.log_error(f"Test generation failed for {concept_name}: {e}")
@@ -690,7 +715,7 @@ class CodingAgent(BaseAgent):
     
     async def _generate_validation_test(
         self,
-        mapping: Dict[str, Any],
+        mapping: MappingResult,
         repo_name: str,
         actual_code: str,
         dependencies: Dict[str, Any],
@@ -707,10 +732,10 @@ class CodingAgent(BaseAgent):
 
         prompt = CODING_AGENT_TEST_GENERATION_PROMPT.format(
             language=language,
-            concept_name=mapping.get("concept_name", "Unknown"),
-            concept_description=mapping.get("concept_description", ""),
-            code_element=mapping.get("code_element", ""),
-            code_file=mapping.get("code_file", ""),
+            concept_name=mapping.concept_name,
+            concept_description=mapping.concept_description,
+            code_element=mapping.code_element,
+            code_file=mapping.code_file,
             repo_name=repo_name,
             actual_code=actual_code or "# Code not available",
             packages=", ".join(dependencies.get("packages", [])[:15])
@@ -732,19 +757,19 @@ class CodingAgent(BaseAgent):
 
     async def _execute_with_sandbox_manager(
         self,
-        scripts: List[Dict[str, Any]],
+        scripts: List[GeneratedScript],
         repo_path: str,
         dependencies: Dict[str, Any],
         output_dir: Path,
         resource_estimate=None
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TestResult]:
         """
         Execute tests using SandboxManager for proper isolation.
 
         This method uses the unified SandboxManager which selects the best
         available backend (QEMU > Bubblewrap > Docker > Subprocess).
         """
-        results = []
+        results: List[TestResult] = []
         language = dependencies.get("language", "python")
 
         # Build SandboxConfig from resource estimate and dependencies
@@ -776,20 +801,21 @@ class CodingAgent(BaseAgent):
 
         # Execute each script
         for script in scripts:
-            if not script.get("syntax_valid", False):
-                results.append({
-                    "concept": script.get("concept"),
-                    "success": False,
-                    "error": "Syntax validation failed",
-                    "stdout": "",
-                    "stderr": script.get("syntax_error", ""),
-                    "execution_time": 0,
-                    "isolation_level": "none"
-                })
+            if not script.syntax_valid:
+                results.append(TestResult(
+                    concept=script.concept,
+                    code_element=script.code_element,
+                    success=False,
+                    error="Syntax validation failed",
+                    stdout="",
+                    stderr=script.validation_error or "",
+                    execution_time=0,
+                    isolation_level="none"
+                ))
                 continue
 
-            script_code = script.get("code", "")
-            concept = script.get("concept", "unknown")
+            script_code = script.code
+            concept = script.concept
 
             try:
                 # Execute using SandboxManager
@@ -799,16 +825,17 @@ class CodingAgent(BaseAgent):
                     config=config
                 )
 
-                results.append({
-                    "concept": concept,
-                    "success": exec_result.success,
-                    "stdout": exec_result.stdout,
-                    "stderr": exec_result.stderr,
-                    "exit_code": exec_result.exit_code,
-                    "execution_time": exec_result.execution_time,
-                    "isolation_level": exec_result.isolation_level.value,
-                    "error": exec_result.error
-                })
+                results.append(TestResult(
+                    concept=concept,
+                    code_element=script.code_element,
+                    success=exec_result.success,
+                    stdout=exec_result.stdout,
+                    stderr=exec_result.stderr,
+                    return_code=exec_result.exit_code,
+                    execution_time=exec_result.execution_time,
+                    isolation_level=exec_result.isolation_level.value,
+                    error=exec_result.error or ""
+                ))
 
                 if exec_result.success:
                     self.log_info(f"Script for '{concept}' passed")
@@ -819,47 +846,48 @@ class CodingAgent(BaseAgent):
 
             except Exception as e:
                 self.log_error(f"Execution error for '{concept}': {e}")
-                results.append({
-                    "concept": concept,
-                    "success": False,
-                    "error": str(e),
-                    "stdout": "",
-                    "stderr": str(e),
-                    "execution_time": 0,
-                    "isolation_level": "none"
-                })
+                results.append(TestResult(
+                    concept=concept,
+                    code_element=script.code_element,
+                    success=False,
+                    error=str(e),
+                    stdout="",
+                    stderr=str(e),
+                    execution_time=0,
+                    isolation_level="none"
+                ))
 
         return results
 
     async def _execute_in_docker_sandbox(
         self,
-        scripts: List[Dict[str, Any]],
+        scripts: List[GeneratedScript],
         repo_path: str,
         dependencies: Dict[str, Any],
         output_dir: Path
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TestResult]:
         """Execute tests in Docker sandbox with repo mounted and deps installed."""
-        results = []
-        
+        results: List[TestResult] = []
+
         # Create scripts directory
         scripts_dir = output_dir / "scripts"
         scripts_dir.mkdir(exist_ok=True)
-        
+
         # Write scripts to disk
         for script in scripts:
-            if script.get("syntax_valid", False):
-                script_path = scripts_dir / script["file_name"]
-                script_path.write_text(script["code"])
-        
+            if script.syntax_valid:
+                script_path = scripts_dir / script.file_name
+                script_path.write_text(script.code)
+
         # Create Dockerfile for sandbox
         dockerfile_content = self._generate_dockerfile(dependencies)
         dockerfile_path = output_dir / "Dockerfile"
         dockerfile_path.write_text(dockerfile_content)
-        
+
         # Build sandbox image
         image_name = f"paper-validator-{os.getpid()}"
         self.log_info("Building Docker sandbox image...")
-        
+
         try:
             build_process = await asyncio.create_subprocess_exec(
                 "docker", "build", "-t", image_name, "-f", str(dockerfile_path), str(output_dir),
@@ -867,52 +895,61 @@ class CodingAgent(BaseAgent):
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(build_process.communicate(), timeout=300)
-            
+
             if build_process.returncode != 0:
                 self.log_error(f"Docker build failed: {stderr.decode()}")
                 return await self._execute_in_venv_sandbox(scripts, repo_path, dependencies, output_dir)
-            
+
             self.log_info("Docker sandbox ready")
-            
+
         except asyncio.TimeoutError:
             self.log_error("Docker build timed out")
             return []
         except Exception as e:
             self.log_error(f"Docker build error: {e}")
             return await self._execute_in_venv_sandbox(scripts, repo_path, dependencies, output_dir)
-        
+
         # Execute each test in the sandbox
         for script in scripts:
-            if not script.get("syntax_valid", False):
-                results.append({
-                    "concept": script.get("concept"),
-                    "success": False,
-                    "error": f"Syntax error: {script.get('syntax_error')}",
-                    "stdout": "",
-                    "stderr": ""
-                })
+            if not script.syntax_valid:
+                results.append(TestResult(
+                    concept=script.concept,
+                    code_element=script.code_element,
+                    success=False,
+                    error=f"Syntax error: {script.validation_error}",
+                    stdout="",
+                    stderr=""
+                ))
                 continue
-            
-            script_name = script["file_name"]
+
+            script_name = script.file_name
             self.log_info(f"Executing: {script_name}")
-            
-            result = await self._run_in_docker(
+
+            result_dict = await self._run_in_docker(
                 image_name, scripts_dir, repo_path, script_name, output_dir,
                 language=dependencies.get("language", "python")
             )
-            result["concept"] = script.get("concept")
-            result["code_element"] = script.get("code_element")
-            results.append(result)
-        
+            results.append(TestResult(
+                concept=script.concept,
+                code_element=script.code_element,
+                success=result_dict.get("success", False),
+                stdout=result_dict.get("stdout", ""),
+                stderr=result_dict.get("stderr", ""),
+                execution_time=result_dict.get("execution_time", 0),
+                return_code=result_dict.get("return_code", -1),
+                output_files=result_dict.get("output_files", []),
+                error=result_dict.get("error", "")
+            ))
+
         # Cleanup image
         try:
             subprocess.run(["docker", "rmi", "-f", image_name], capture_output=True)
         except:
             pass
-        
-        success_count = sum(1 for r in results if r.get("success"))
+
+        success_count = sum(1 for r in results if r.success)
         self.log_info(f"Execution complete: {success_count}/{len(results)} succeeded")
-        
+
         return results
     
     def _generate_dockerfile(self, dependencies: Dict[str, Any]) -> str:
@@ -1120,25 +1157,25 @@ CMD ["octave", "--no-gui"]
     
     async def _execute_in_venv_sandbox(
         self,
-        scripts: List[Dict[str, Any]],
+        scripts: List[GeneratedScript],
         repo_path: str,
         dependencies: Dict[str, Any],
         output_dir: Path
-    ) -> List[Dict[str, Any]]:
+    ) -> List[TestResult]:
         """Fallback: Execute in virtual environment sandbox."""
-        results = []
-        
+        results: List[TestResult] = []
+
         self.log_info("Using virtual environment sandbox (Docker unavailable)")
-        
+
         # Create venv
         venv_dir = output_dir / "venv"
         scripts_dir = output_dir / "scripts"
         scripts_dir.mkdir(exist_ok=True)
-        
+
         try:
             # Create virtual environment
             subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
-            
+
             # Get pip path
             if sys.platform == "win32":
                 pip_path = venv_dir / "Scripts" / "pip"
@@ -1146,49 +1183,58 @@ CMD ["octave", "--no-gui"]
             else:
                 pip_path = venv_dir / "bin" / "pip"
                 python_path = venv_dir / "bin" / "python"
-            
+
             # Install base dependencies
-            subprocess.run([str(pip_path), "install", "--quiet", "numpy", "scipy", "matplotlib"], 
+            subprocess.run([str(pip_path), "install", "--quiet", "numpy", "scipy", "matplotlib"],
                           capture_output=True)
-            
+
             # Install repo dependencies
             packages = dependencies.get("packages", [])[:20]
             if packages:
                 subprocess.run([str(pip_path), "install", "--quiet"] + packages,
                               capture_output=True)
-            
+
             # Install repo itself if setup.py exists
             if repo_path and (Path(repo_path) / "setup.py").exists():
                 subprocess.run([str(pip_path), "install", "-e", repo_path],
                               capture_output=True)
-            
+
         except Exception as e:
             self.log_error(f"Venv setup failed: {e}")
             python_path = Path(sys.executable)
-        
+
         # Write and execute scripts
         for script in scripts:
-            if not script.get("syntax_valid", False):
-                results.append({
-                    "concept": script.get("concept"),
-                    "success": False,
-                    "error": f"Syntax error: {script.get('syntax_error')}"
-                })
+            if not script.syntax_valid:
+                results.append(TestResult(
+                    concept=script.concept,
+                    code_element=script.code_element,
+                    success=False,
+                    error=f"Syntax error: {script.validation_error}"
+                ))
                 continue
-            
-            script_path = scripts_dir / script["file_name"]
-            script_path.write_text(script["code"])
-            
-            self.log_info(f"Executing: {script['file_name']}")
-            
-            result = await self._run_in_venv(python_path, script_path, repo_path, output_dir)
-            result["concept"] = script.get("concept")
-            result["code_element"] = script.get("code_element")
-            results.append(result)
-        
-        success_count = sum(1 for r in results if r.get("success"))
+
+            script_path = scripts_dir / script.file_name
+            script_path.write_text(script.code)
+
+            self.log_info(f"Executing: {script.file_name}")
+
+            result_dict = await self._run_in_venv(python_path, script_path, repo_path, output_dir)
+            results.append(TestResult(
+                concept=script.concept,
+                code_element=script.code_element,
+                success=result_dict.get("success", False),
+                stdout=result_dict.get("stdout", ""),
+                stderr=result_dict.get("stderr", ""),
+                execution_time=result_dict.get("execution_time", 0),
+                return_code=result_dict.get("return_code", -1),
+                output_files=result_dict.get("output_files", []),
+                error=result_dict.get("error", "")
+            ))
+
+        success_count = sum(1 for r in results if r.success)
         self.log_info(f"Execution complete: {success_count}/{len(results)} succeeded")
-        
+
         return results
     
     async def _run_in_venv(

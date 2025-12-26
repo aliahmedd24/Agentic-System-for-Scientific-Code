@@ -2,7 +2,9 @@
 Parser Factory - Creates appropriate parsers for different languages.
 """
 
-from typing import Dict, List, Optional
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from . import LanguageParser, CodeElement
@@ -177,3 +179,92 @@ class ParserFactory:
             return "python"
 
         return max(stats, key=stats.get)
+
+    async def parse_file_async(
+        self,
+        file_path: Path,
+        executor: Optional[ThreadPoolExecutor] = None
+    ) -> Tuple[Path, Dict[str, List[CodeElement]], Optional[Exception]]:
+        """
+        Parse a file asynchronously using a thread executor.
+
+        Args:
+            file_path: Path to the file to parse
+            executor: Optional thread pool executor (uses default if None)
+
+        Returns:
+            Tuple of (file_path, parsed_elements, error_or_none)
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                executor,
+                self.parse_file,
+                file_path
+            )
+            return (file_path, result, None)
+        except Exception as e:
+            return (file_path, {"classes": [], "functions": [], "imports": [], "constants": []}, e)
+
+    async def parse_files_parallel(
+        self,
+        file_paths: List[Path],
+        batch_size: int = 20,
+        max_workers: int = 8
+    ) -> Dict[str, List[CodeElement]]:
+        """
+        Parse multiple files in parallel using batched async execution.
+
+        Args:
+            file_paths: List of file paths to parse
+            batch_size: Number of files to process concurrently per batch
+            max_workers: Maximum thread pool workers
+
+        Returns:
+            Aggregated dict with all code elements from all files
+        """
+        result = {
+            "classes": [],
+            "functions": [],
+            "imports": [],
+            "constants": [],
+            "_parse_errors": [],  # Track files that failed to parse
+            "_files_parsed": 0
+        }
+
+        # Use a thread pool for I/O-bound file operations
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Process files in batches to avoid overwhelming the system
+            for i in range(0, len(file_paths), batch_size):
+                batch = file_paths[i:i + batch_size]
+
+                # Create async tasks for this batch
+                tasks = [
+                    self.parse_file_async(file_path, executor)
+                    for file_path in batch
+                ]
+
+                # Execute batch concurrently
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Aggregate results from this batch
+                for item in batch_results:
+                    if isinstance(item, Exception):
+                        # Task itself raised an exception
+                        result["_parse_errors"].append(str(item))
+                        continue
+
+                    file_path, file_result, error = item
+
+                    if error is not None:
+                        result["_parse_errors"].append(f"{file_path}: {error}")
+                        continue
+
+                    # Successfully parsed - aggregate elements
+                    result["classes"].extend(file_result.get("classes", []))
+                    result["functions"].extend(file_result.get("functions", []))
+                    result["imports"].extend(file_result.get("imports", []))
+                    result["constants"].extend(file_result.get("constants", []))
+                    result["_files_parsed"] += 1
+
+        return result

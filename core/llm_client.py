@@ -183,9 +183,9 @@ class GeminiProvider(BaseLLMProvider):
 
 class AnthropicProvider(BaseLLMProvider):
     """Anthropic Claude API provider."""
-    
+
     BASE_URL = "https://api.anthropic.com/v1"
-    
+
     @with_retry(ErrorCategory.LLM, "Anthropic API call")
     async def generate(
         self,
@@ -193,35 +193,35 @@ class AnthropicProvider(BaseLLMProvider):
         system_instruction: Optional[str] = None
     ) -> str:
         await self._ensure_client()
-        
+
         url = f"{self.BASE_URL}/messages"
-        
+
         body = {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "messages": [{"role": "user", "content": prompt}]
         }
-        
+
         if system_instruction:
             body["system"] = system_instruction
-        
+
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.config.api_key,
             "anthropic-version": "2023-06-01"
         }
-        
+
         response = await self.client.post(url, json=body, headers=headers)
-        
+
         if response.status_code != 200:
             raise AgentError(create_error(
                 ErrorCategory.LLM,
                 f"Anthropic API error: {response.status_code} - {response.text}",
                 suggestion="Check your API key and try again"
             ))
-        
+
         data = response.json()
-        
+
         try:
             return data["content"][0]["text"]
         except (KeyError, IndexError) as e:
@@ -238,41 +238,71 @@ class AnthropicProvider(BaseLLMProvider):
         schema: Dict[str, Any],
         system_instruction: Optional[str] = None
     ) -> Dict[str, Any]:
-        json_instruction = (
-            f"You must respond with valid JSON matching this schema:\n"
-            f"{json.dumps(schema, indent=2)}\n\n"
-            "Only output the JSON, no other text or markdown formatting."
-        )
-        
-        full_system = f"{system_instruction}\n\n{json_instruction}" if system_instruction else json_instruction
-        
-        response = await self.generate(prompt, full_system)
-        
-        # Clean up response
-        response = response.strip()
-        if response.startswith("```json"):
-            response = response[7:]
-        if response.startswith("```"):
-            response = response[3:]
-        if response.endswith("```"):
-            response = response[:-3]
-        response = response.strip()
-        
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as e:
+        """
+        Generate structured output using Anthropic's native tool use.
+
+        Uses the tool_use feature to enforce schema compliance.
+        """
+        await self._ensure_client()
+
+        url = f"{self.BASE_URL}/messages"
+
+        # Build tool definition from schema
+        tool_definition = {
+            "name": "structured_output",
+            "description": "Output structured data matching the required schema",
+            "input_schema": schema
+        }
+
+        body = {
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [tool_definition],
+            "tool_choice": {"type": "tool", "name": "structured_output"}
+        }
+
+        if system_instruction:
+            body["system"] = system_instruction
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.config.api_key,
+            "anthropic-version": "2023-06-01"
+        }
+
+        response = await self.client.post(url, json=body, headers=headers)
+
+        if response.status_code != 200:
             raise AgentError(create_error(
-                ErrorCategory.PARSING,
-                f"Failed to parse LLM response as JSON: {response[:200]}...",
+                ErrorCategory.LLM,
+                f"Anthropic API error: {response.status_code} - {response.text}",
+                suggestion="Check your API key and try again"
+            ))
+
+        data = response.json()
+
+        try:
+            # Extract tool use result
+            for content_block in data.get("content", []):
+                if content_block.get("type") == "tool_use":
+                    return content_block.get("input", {})
+
+            raise ValueError("No tool_use response found in Anthropic response")
+
+        except (KeyError, IndexError, ValueError) as e:
+            raise AgentError(create_error(
+                ErrorCategory.LLM,
+                f"Unexpected Anthropic response format: {data}",
                 original_error=e
             ))
 
 
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI API provider."""
-    
+
     BASE_URL = "https://api.openai.com/v1"
-    
+
     @with_retry(ErrorCategory.LLM, "OpenAI API call")
     async def generate(
         self,
@@ -280,37 +310,37 @@ class OpenAIProvider(BaseLLMProvider):
         system_instruction: Optional[str] = None
     ) -> str:
         await self._ensure_client()
-        
+
         url = f"{self.BASE_URL}/chat/completions"
-        
+
         messages = []
         if system_instruction:
             messages.append({"role": "system", "content": system_instruction})
         messages.append({"role": "user", "content": prompt})
-        
+
         body = {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
             "messages": messages
         }
-        
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.config.api_key}"
         }
-        
+
         response = await self.client.post(url, json=body, headers=headers)
-        
+
         if response.status_code != 200:
             raise AgentError(create_error(
                 ErrorCategory.LLM,
                 f"OpenAI API error: {response.status_code} - {response.text}",
                 suggestion="Check your API key and try again"
             ))
-        
+
         data = response.json()
-        
+
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as e:
@@ -327,32 +357,61 @@ class OpenAIProvider(BaseLLMProvider):
         schema: Dict[str, Any],
         system_instruction: Optional[str] = None
     ) -> Dict[str, Any]:
-        json_instruction = (
-            f"You must respond with valid JSON matching this schema:\n"
-            f"{json.dumps(schema, indent=2)}\n\n"
-            "Only output the JSON, no other text or markdown formatting."
-        )
-        
-        full_system = f"{system_instruction}\n\n{json_instruction}" if system_instruction else json_instruction
-        
-        response = await self.generate(prompt, full_system)
-        
-        # Clean up response
-        response = response.strip()
-        if response.startswith("```json"):
-            response = response[7:]
-        if response.startswith("```"):
-            response = response[3:]
-        if response.endswith("```"):
-            response = response[:-3]
-        response = response.strip()
-        
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as e:
+        """
+        Generate structured output using OpenAI's response_format.
+
+        Uses json_schema response format for guaranteed schema compliance.
+        """
+        await self._ensure_client()
+
+        url = f"{self.BASE_URL}/chat/completions"
+
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
+
+        # Ensure schema has required 'name' field for OpenAI
+        schema_name = schema.get("title", "structured_output")
+
+        body = {
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema
+                }
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.config.api_key}"
+        }
+
+        response = await self.client.post(url, json=body, headers=headers)
+
+        if response.status_code != 200:
             raise AgentError(create_error(
-                ErrorCategory.PARSING,
-                f"Failed to parse LLM response as JSON: {response[:200]}...",
+                ErrorCategory.LLM,
+                f"OpenAI API error: {response.status_code} - {response.text}",
+                suggestion="Check your API key and try again"
+            ))
+
+        data = response.json()
+
+        try:
+            content = data["choices"][0]["message"]["content"]
+            return json.loads(content)
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            raise AgentError(create_error(
+                ErrorCategory.LLM,
+                f"Failed to parse OpenAI structured response: {data}",
                 original_error=e
             ))
 

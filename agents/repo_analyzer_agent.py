@@ -11,9 +11,13 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Set
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
+
 from .base_agent import BaseAgent
 from .parsers import ParserFactory, CodeElement
+from .protocols import RepoAnalyzerOutput
 from core.llm_client import LLMClient
+from core.schema_utils import generate_llm_schema
 from core.knowledge_graph import (
     KnowledgeGraph, NodeType, EdgeType,
     create_function_node
@@ -66,20 +70,50 @@ SKIP_DIRS = {
 class RepoAnalyzerAgent(BaseAgent):
     """
     Analyzes code repositories to understand structure and implementations.
+
+    Uses parallel file parsing for improved performance on large repositories.
+    Configure parallel parsing behavior via constructor parameters.
     """
-    
-    def __init__(self, llm_client: LLMClient, github_token: Optional[str] = None):
+
+    # Default parallel parsing configuration
+    DEFAULT_MAX_FILES = 200
+    DEFAULT_BATCH_SIZE = 20
+    DEFAULT_MAX_WORKERS = 8
+
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        github_token: Optional[str] = None,
+        max_files: int = DEFAULT_MAX_FILES,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        max_workers: int = DEFAULT_MAX_WORKERS
+    ):
+        """
+        Initialize the repository analyzer agent.
+
+        Args:
+            llm_client: LLM client for analysis
+            github_token: Optional GitHub token for private repos
+            max_files: Maximum files to parse (default 200)
+            batch_size: Files to parse concurrently per batch (default 20)
+            max_workers: Thread pool size for parallel parsing (default 8)
+        """
         super().__init__(llm_client, name="RepoAnalyzer")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN")
         self._temp_dirs: List[str] = []
         self._parser_factory = ParserFactory()
+
+        # Parallel parsing configuration
+        self._max_files = max_files
+        self._batch_size = batch_size
+        self._max_workers = max_workers
     
     async def process(
         self,
         *,
         repo_url: str,
         knowledge_graph: KnowledgeGraph = None
-    ) -> Dict[str, Any]:
+    ) -> RepoAnalyzerOutput:
         """
         Analyze a code repository and extract structure.
 
@@ -88,71 +122,77 @@ class RepoAnalyzerAgent(BaseAgent):
             knowledge_graph: Optional knowledge graph to populate
 
         Returns:
-            Dict with repository analysis (RepoAnalyzerOutput)
+            RepoAnalyzerOutput with repository analysis
         """
         if not repo_url:
             raise ValueError("repo_url is required")
         if knowledge_graph is None:
             knowledge_graph = KnowledgeGraph()
         return await self.analyze(repo_url, knowledge_graph)
-    
+
     async def analyze(
         self,
         repo_url: str,
         kg: KnowledgeGraph
-    ) -> Dict[str, Any]:
+    ) -> RepoAnalyzerOutput:
         """
         Analyze a code repository.
-        
+
         Args:
             repo_url: GitHub URL or local path
             kg: Knowledge graph to populate
-            
+
         Returns:
-            Dictionary with repository analysis
+            RepoAnalyzerOutput with repository analysis
         """
         self.log_info(f"Analyzing repository: {repo_url}")
-        
+
         # Step 1: Clone/locate repository
         repo_path = await self._timed_operation(
             "get_repository",
             self._get_repository(repo_url)
         )
-        
+
         # Step 2: Scan structure
         structure = await self._timed_operation(
             "scan_structure",
             self._scan_structure(repo_path)
         )
-        
-        # Step 3: Extract code elements
+
+        # Step 3: Extract code elements (uses parallel parsing)
         code_elements = await self._timed_operation(
             "extract_code",
-            self._extract_code_elements(repo_path, structure)
+            self._extract_code_elements(
+                repo_path,
+                structure,
+                max_files=self._max_files,
+                batch_size=self._batch_size,
+                max_workers=self._max_workers
+            )
         )
-        
+
         # Step 4: Read key files
         key_files_content = await self._timed_operation(
             "read_key_files",
             self._read_key_files(repo_path, structure)
         )
-        
-        # Step 5: LLM analysis
+
+        # Step 5: LLM analysis (returns RepoAnalyzerOutput)
         repo_data = await self._timed_operation(
             "llm_analysis",
             self._analyze_repository(
                 repo_url, structure, code_elements, key_files_content
             )
         )
-        
+
         # Step 6: Populate knowledge graph
         await self._populate_knowledge_graph(repo_data, code_elements, kg)
-        
-        # Add raw data to result
-        repo_data["_structure"] = structure
-        repo_data["_code_elements"] = code_elements
-        repo_data["_repo_path"] = str(repo_path)
-        
+
+        # Set private fields on Pydantic model
+        repo_data._structure = structure
+        repo_data._code_elements = code_elements
+        repo_data._repo_path = str(repo_path)
+
         return repo_data
     
     @with_retry(ErrorCategory.NETWORK, "Repository clone")
@@ -297,19 +337,33 @@ class RepoAnalyzerAgent(BaseAgent):
     async def _extract_code_elements(
         self,
         repo_path: Path,
-        structure: Dict[str, Any]
+        structure: Dict[str, Any],
+        max_files: int = 200,
+        batch_size: int = 20,
+        max_workers: int = 8
     ) -> Dict[str, Any]:
         """
         Extract classes, functions, and other code elements using multi-language parsers.
 
+        Uses parallel parsing with batched async execution for improved performance
+        on large repositories.
+
         Supports: Python, Julia, R, JavaScript/TypeScript
+
+        Args:
+            repo_path: Path to the repository root
+            structure: Repository structure from _scan_structure
+            max_files: Maximum number of files to parse (default 200)
+            batch_size: Number of files to process concurrently per batch (default 20)
+            max_workers: Maximum thread pool workers (default 8)
         """
         elements = {
             "classes": [],
             "functions": [],
             "imports": [],
             "constants": [],
-            "language_stats": {}
+            "language_stats": {},
+            "_parse_stats": {}
         }
 
         # Get language statistics
@@ -326,38 +380,67 @@ class RepoAnalyzerAgent(BaseAgent):
             if f["extension"].lower() in supported_extensions
         ]
 
+        total_code_files = len(code_files)
+
         # Limit to reasonable number of files with smart prioritization
-        if len(code_files) > 100:
-            code_files = self._prioritize_files(code_files)[:100]
+        if len(code_files) > max_files:
+            code_files = self._prioritize_files(code_files)[:max_files]
 
-        for file_info in code_files:
-            file_path = repo_path / file_info["path"]
-            try:
-                # Use the multi-language parser factory
-                file_elements = self._parser_factory.parse_file(file_path)
+        # Build list of file paths for parallel parsing
+        file_paths = [repo_path / f["path"] for f in code_files]
 
-                # Convert CodeElement objects to dicts for JSON serialization
-                for cls in file_elements.get("classes", []):
-                    if isinstance(cls, CodeElement):
-                        elements["classes"].append(cls.to_dict())
-                    else:
-                        elements["classes"].append(cls)
+        self.log_info(
+            f"Starting parallel parsing of {len(file_paths)} files "
+            f"(batch_size={batch_size}, max_workers={max_workers})"
+        )
 
-                for func in file_elements.get("functions", []):
-                    if isinstance(func, CodeElement):
-                        elements["functions"].append(func.to_dict())
-                    else:
-                        elements["functions"].append(func)
+        # Use parallel parsing for improved performance
+        parsed = await self._parser_factory.parse_files_parallel(
+            file_paths=file_paths,
+            batch_size=batch_size,
+            max_workers=max_workers
+        )
 
-                elements["imports"].extend(file_elements.get("imports", []))
-                elements["constants"].extend(file_elements.get("constants", []))
+        # Convert CodeElement objects to dicts for JSON serialization
+        for cls in parsed.get("classes", []):
+            if isinstance(cls, CodeElement):
+                elements["classes"].append(cls.to_dict())
+            else:
+                elements["classes"].append(cls)
 
-            except Exception as e:
-                self.log_warning(f"Failed to parse {file_info['path']}: {e}")
+        for func in parsed.get("functions", []):
+            if isinstance(func, CodeElement):
+                elements["functions"].append(func.to_dict())
+            else:
+                elements["functions"].append(func)
+
+        elements["imports"].extend(parsed.get("imports", []))
+        elements["constants"].extend(parsed.get("constants", []))
+
+        # Track parsing statistics
+        files_parsed = parsed.get("_files_parsed", 0)
+        parse_errors = parsed.get("_parse_errors", [])
+
+        elements["_parse_stats"] = {
+            "total_code_files": total_code_files,
+            "files_attempted": len(file_paths),
+            "files_parsed": files_parsed,
+            "parse_errors": len(parse_errors),
+            "batch_size": batch_size,
+            "max_workers": max_workers
+        }
+
+        # Log any parse errors at warning level
+        if parse_errors:
+            self.log_warning(f"Failed to parse {len(parse_errors)} files")
+            for error in parse_errors[:5]:  # Log first 5 errors
+                self.log_warning(f"  Parse error: {error}")
+            if len(parse_errors) > 5:
+                self.log_warning(f"  ... and {len(parse_errors) - 5} more errors")
 
         self.log_info(
             f"Extracted {len(elements['classes'])} classes, "
-            f"{len(elements['functions'])} functions from {len(code_files)} files"
+            f"{len(elements['functions'])} functions from {files_parsed}/{len(file_paths)} files"
         )
 
         return elements
@@ -502,7 +585,7 @@ class RepoAnalyzerAgent(BaseAgent):
         structure: Dict[str, Any],
         code_elements: Dict[str, Any],
         key_files: Dict[str, str]
-    ) -> Dict[str, Any]:
+    ) -> RepoAnalyzerOutput:
         """Use LLM to analyze repository."""
         # Prepare structure summary
         structure_summary = f"""
@@ -516,69 +599,67 @@ File types:
 Directories:
 {chr(10).join('  ' + d for d in structure['directories'][:20])}
 """
-        
+
         # Prepare key files summary
         key_files_summary = ""
         for path, content in key_files.items():
             key_files_summary += f"\n--- {path} ---\n{content[:3000]}\n"
-        
+
         prompt = REPO_ANALYZER_STRUCTURE_PROMPT.format(
             repo_name=structure['name'],
             structure=structure_summary,
             key_files=key_files_summary
         )
-        
+
+        # Generate schema appropriate for the LLM provider
+        provider_name = self.llm.config.provider.value
+        schema = generate_llm_schema(RepoAnalyzerOutput, provider_name)
+
         try:
-            result = await self.llm.generate_structured(
+            result_dict = await self.llm.generate_structured(
                 prompt,
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "overview": {"type": "object"},
-                        "key_components": {"type": "array"},
-                        "entry_points": {"type": "array"},
-                        "dependencies": {"type": "object"},
-                        "setup_complexity": {"type": "object"},
-                        "compute_requirements": {"type": "object"}
-                    }
-                },
+                schema=schema,
                 system_instruction=REPO_ANALYZER_SYSTEM_PROMPT
             )
-            
-            result["name"] = structure["name"]
-            result["url"] = repo_url
-            result["stats"] = {
+
+            # Add non-LLM-generated fields
+            result_dict["name"] = structure["name"]
+            result_dict["url"] = repo_url
+            result_dict["stats"] = {
                 "total_files": structure["total_files"],
                 "code_files": len(structure["code_files"]),
                 "classes": len(code_elements["classes"]),
                 "functions": len(code_elements["functions"])
             }
-            
-            return result
-            
+
+            # Validate with Pydantic
+            try:
+                output = RepoAnalyzerOutput.model_validate(result_dict)
+            except ValidationError as ve:
+                raise AgentError(create_error(
+                    ErrorCategory.VALIDATION,
+                    f"LLM output validation failed: {ve}",
+                    original_error=ve,
+                    recoverable=False,
+                    suggestion="LLM returned data that doesn't match expected schema"
+                ))
+
+            return output
+
+        except AgentError:
+            raise  # Re-raise AgentError as-is
         except Exception as e:
             self.log_error(f"LLM analysis failed: {e}")
-            return {
-                "name": structure["name"],
-                "url": repo_url,
-                "overview": {"purpose": "Analysis failed"},
-                "key_components": [],
-                "entry_points": [],
-                "dependencies": {},
-                "setup_complexity": {"level": "unknown"},
-                "compute_requirements": {},
-                "stats": {
-                    "total_files": structure["total_files"],
-                    "code_files": len(structure["code_files"]),
-                    "classes": len(code_elements["classes"]),
-                    "functions": len(code_elements["functions"])
-                },
-                "analysis_error": str(e)
-            }
+            raise AgentError(create_error(
+                ErrorCategory.LLM,
+                f"Repository analysis failed: {e}",
+                original_error=e,
+                recoverable=False
+            ))
     
     async def _populate_knowledge_graph(
         self,
-        repo_data: Dict[str, Any],
+        repo_data: RepoAnalyzerOutput,
         code_elements: Dict[str, Any],
         kg: KnowledgeGraph
     ):
@@ -586,14 +667,14 @@ Directories:
         # Create repository node
         repo_id = kg.add_node(
             type=NodeType.REPOSITORY,
-            name=repo_data.get("name", "Unknown"),
-            description=repo_data.get("overview", {}).get("purpose", ""),
+            name=repo_data.name,
+            description=repo_data.overview.purpose if repo_data.overview else "",
             metadata={
-                "url": repo_data.get("url"),
-                "stats": repo_data.get("stats", {})
+                "url": repo_data.url,
+                "stats": repo_data.stats.model_dump() if repo_data.stats else {}
             }
         )
-        
+
         # Create class nodes
         for cls in code_elements.get("classes", [])[:50]:  # Limit
             cls_id = kg.add_node(
@@ -607,7 +688,7 @@ Directories:
                 }
             )
             kg.add_edge(repo_id, cls_id, EdgeType.CONTAINS)
-        
+
         # Create function nodes
         for func in code_elements.get("functions", [])[:100]:  # Limit
             func_id = create_function_node(
@@ -618,8 +699,8 @@ Directories:
                 docstring=func.get("docstring", "")[:500]
             )
             kg.add_edge(repo_id, func_id, EdgeType.CONTAINS)
-        
-        repo_data["_kg_repo_id"] = repo_id
+
+        repo_data._kg_repo_id = repo_id
         self.log_info(f"Knowledge graph now has {kg.get_statistics()['total_nodes']} nodes")
     
     def cleanup(self):

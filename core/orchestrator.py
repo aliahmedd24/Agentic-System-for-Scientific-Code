@@ -10,6 +10,10 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from pathlib import Path
 
+from agents.protocols import (
+    PaperParserOutput, RepoAnalyzerOutput,
+    MappingResult, TestResult
+)
 from .knowledge_graph import KnowledgeGraph
 from .error_handling import logger, LogCategory
 from .checkpointing import get_checkpoint_manager, CheckpointStage
@@ -67,14 +71,26 @@ class PipelineEvent:
 @dataclass
 class PipelineResult:
     """Result returned by the pipeline."""
-    paper_data: Optional[Dict[str, Any]] = None
-    repo_data: Optional[Dict[str, Any]] = None
-    mappings: Optional[List[Dict[str, Any]]] = None
-    code_results: Optional[List[Dict[str, Any]]] = None
+    paper_data: Optional[PaperParserOutput] = None
+    repo_data: Optional[RepoAnalyzerOutput] = None
+    mappings: Optional[List[MappingResult]] = None
+    code_results: Optional[List[TestResult]] = None
     knowledge_graph: Optional[KnowledgeGraph] = None
     report_paths: List[str] = field(default_factory=list)
-    errors: List[Any] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
     status: str = "completed"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON/checkpoint storage."""
+        return {
+            "paper_data": self.paper_data.model_dump() if self.paper_data else None,
+            "repo_data": self.repo_data.model_dump() if self.repo_data else None,
+            "mappings": [m.model_dump() for m in self.mappings] if self.mappings else None,
+            "code_results": [r.model_dump() for r in self.code_results] if self.code_results else None,
+            "report_paths": self.report_paths,
+            "errors": self.errors,
+            "status": self.status
+        }
 
 
 # Type for event callbacks
@@ -258,7 +274,7 @@ class PipelineOrchestrator:
                         paper_source=paper_source,
                         knowledge_graph=result.knowledge_graph
                     )
-                    title = result.paper_data.get('title', 'Unknown') if result.paper_data else 'Unknown'
+                    title = result.paper_data.title if result.paper_data else 'Unknown'
                     await self._emit_event(
                         PipelineStage.PARSING_PAPER,
                         f"Paper parsed: {title}"
@@ -270,7 +286,7 @@ class PipelineOrchestrator:
                         stage=CheckpointStage.PAPER_PARSED,
                         paper_source=paper_source,
                         repo_url=repo_url,
-                        paper_data=result.paper_data
+                        paper_data=result.paper_data.model_dump() if result.paper_data else None
                     )
                     self._metrics.record_pipeline_stage("paper_parsed", duration_ms, success=True)
 
@@ -278,7 +294,7 @@ class PipelineOrchestrator:
                     duration_ms = (time.time() - stage_start_time) * 1000
                     self._metrics.record_pipeline_stage("paper_parsed", duration_ms, success=False)
                     logger.error(f"Paper parsing failed: {e}", category=LogCategory.PIPELINE)
-                    result.paper_data = {"error": str(e), "title": "Parse Failed"}
+                    result.paper_data = None
                     result.errors.append(str(e))
             
             # Stage 2: Analyze Repository
@@ -300,7 +316,7 @@ class PipelineOrchestrator:
                         repo_url=repo_url,
                         knowledge_graph=result.knowledge_graph
                     )
-                    name = result.repo_data.get('name', 'Unknown') if result.repo_data else 'Unknown'
+                    name = result.repo_data.name if result.repo_data else 'Unknown'
                     await self._emit_event(
                         PipelineStage.ANALYZING_REPO,
                         f"Repository analyzed: {name}"
@@ -312,8 +328,8 @@ class PipelineOrchestrator:
                         stage=CheckpointStage.REPO_ANALYZED,
                         paper_source=paper_source,
                         repo_url=repo_url,
-                        paper_data=result.paper_data,
-                        repo_data=result.repo_data
+                        paper_data=result.paper_data.model_dump() if result.paper_data else None,
+                        repo_data=result.repo_data.model_dump() if result.repo_data else None
                     )
                     self._metrics.record_pipeline_stage("repo_analyzed", duration_ms, success=True)
 
@@ -321,7 +337,7 @@ class PipelineOrchestrator:
                     duration_ms = (time.time() - stage_start_time) * 1000
                     self._metrics.record_pipeline_stage("repo_analyzed", duration_ms, success=False)
                     logger.error(f"Repository analysis failed: {e}", category=LogCategory.PIPELINE)
-                    result.repo_data = {"error": str(e), "name": "Analysis Failed"}
+                    result.repo_data = None
                     result.errors.append(str(e))
             
             # Stage 3: Semantic Mapping
@@ -339,12 +355,12 @@ class PipelineOrchestrator:
                 )
                 try:
                     semantic_mapper = await self._get_semantic_mapper()
-                    mapping_result = await semantic_mapper.process(
+                    mapping_output = await semantic_mapper.process(
                         paper_data=result.paper_data,
                         repo_data=result.repo_data,
                         knowledge_graph=result.knowledge_graph
                     )
-                    result.mappings = mapping_result.get("mappings", []) if mapping_result else []
+                    result.mappings = mapping_output.mappings if mapping_output else []
                     await self._emit_event(
                         PipelineStage.MAPPING_CONCEPTS,
                         f"Found {len(result.mappings)} concept-to-code mappings"
@@ -356,9 +372,9 @@ class PipelineOrchestrator:
                         stage=CheckpointStage.CONCEPTS_MAPPED,
                         paper_source=paper_source,
                         repo_url=repo_url,
-                        paper_data=result.paper_data,
-                        repo_data=result.repo_data,
-                        mappings=result.mappings
+                        paper_data=result.paper_data.model_dump() if result.paper_data else None,
+                        repo_data=result.repo_data.model_dump() if result.repo_data else None,
+                        mappings=[m.model_dump() for m in result.mappings] if result.mappings else None
                     )
                     self._metrics.record_pipeline_stage("concepts_mapped", duration_ms, success=True)
 
@@ -385,13 +401,13 @@ class PipelineOrchestrator:
                 )
                 try:
                     coding_agent = await self._get_coding_agent()
-                    code_result = await coding_agent.process(
+                    code_output = await coding_agent.process(
                         mappings=result.mappings,
                         repo_data=result.repo_data,
                         knowledge_graph=result.knowledge_graph,
                         execute=True
                     )
-                    result.code_results = code_result.get("results", []) if code_result else []
+                    result.code_results = code_output.results if code_output else []
                     await self._emit_event(
                         PipelineStage.EXECUTING_CODE,
                         f"Executed {len(result.code_results)} test scripts"
@@ -403,10 +419,10 @@ class PipelineOrchestrator:
                         stage=CheckpointStage.TESTS_EXECUTED,
                         paper_source=paper_source,
                         repo_url=repo_url,
-                        paper_data=result.paper_data,
-                        repo_data=result.repo_data,
-                        mappings=result.mappings,
-                        code_results=result.code_results,
+                        paper_data=result.paper_data.model_dump() if result.paper_data else None,
+                        repo_data=result.repo_data.model_dump() if result.repo_data else None,
+                        mappings=[m.model_dump() for m in result.mappings] if result.mappings else None,
+                        code_results=[r.model_dump() for r in result.code_results] if result.code_results else None,
                         knowledge_graph_data=result.knowledge_graph.to_dict() if result.knowledge_graph else None
                     )
                     self._metrics.record_pipeline_stage("code_executed", duration_ms, success=True)
@@ -431,10 +447,10 @@ class PipelineOrchestrator:
                 stage=CheckpointStage.COMPLETED,
                 paper_source=paper_source,
                 repo_url=repo_url,
-                paper_data=result.paper_data,
-                repo_data=result.repo_data,
-                mappings=result.mappings,
-                code_results=result.code_results,
+                paper_data=result.paper_data.model_dump() if result.paper_data else None,
+                repo_data=result.repo_data.model_dump() if result.repo_data else None,
+                mappings=[m.model_dump() for m in result.mappings] if result.mappings else None,
+                code_results=[r.model_dump() for r in result.code_results] if result.code_results else None,
                 knowledge_graph_data=result.knowledge_graph.to_dict() if result.knowledge_graph else None
             )
             
