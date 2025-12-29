@@ -16,23 +16,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # ============================================================================
-# Pytest Configuration
-# ============================================================================
-
-def pytest_configure(config):
-    """Configure pytest markers."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "requires_llm: marks tests that require an LLM API key"
-    )
-
-
-# ============================================================================
 # Event Loop Fixture
 # ============================================================================
 
@@ -86,56 +69,52 @@ def populated_knowledge_graph(knowledge_graph):
         create_concept_node,
         create_function_node,
         create_mapping_node,
-        NodeType,
         EdgeType
     )
-    
-    # Add paper node
-    paper_node = create_paper_node(
-        paper_id="test_paper_001",
+
+    # Add paper node (helper function takes kg as first arg and returns node_id)
+    paper_node_id = create_paper_node(
+        knowledge_graph,
         title="Test Paper on Machine Learning",
         authors=["Alice Smith", "Bob Jones"],
         abstract="This paper presents a novel approach to machine learning."
     )
-    knowledge_graph.add_node(paper_node)
-    
+
     # Add concept nodes
-    concept1 = create_concept_node(
+    concept1_id = create_concept_node(
+        knowledge_graph,
         name="neural_network",
         description="A computational model inspired by biological neural networks"
     )
-    concept2 = create_concept_node(
+    concept2_id = create_concept_node(
+        knowledge_graph,
         name="backpropagation",
         description="Algorithm for training neural networks"
     )
-    knowledge_graph.add_node(concept1)
-    knowledge_graph.add_node(concept2)
-    
+
     # Add function node
-    func_node = create_function_node(
+    func_node_id = create_function_node(
+        knowledge_graph,
         name="train_model",
         file_path="/repo/train.py",
         signature="def train_model(data, epochs=10)",
         docstring="Train the neural network model"
     )
-    knowledge_graph.add_node(func_node)
-    
+
     # Add relationships
-    knowledge_graph.add_edge(paper_node.id, concept1.id, EdgeType.CONTAINS)
-    knowledge_graph.add_edge(paper_node.id, concept2.id, EdgeType.CONTAINS)
-    knowledge_graph.add_edge(concept2.id, concept1.id, EdgeType.DEPENDS_ON)
-    
-    # Add mapping
-    mapping_node = create_mapping_node(
-        concept_name="neural_network",
-        code_element="train_model",
+    knowledge_graph.add_edge(paper_node_id, concept1_id, EdgeType.CONTAINS)
+    knowledge_graph.add_edge(paper_node_id, concept2_id, EdgeType.CONTAINS)
+    knowledge_graph.add_edge(concept2_id, concept1_id, EdgeType.DEPENDS_ON)
+
+    # Add mapping (create_mapping_node automatically adds the edges)
+    create_mapping_node(
+        knowledge_graph,
+        concept_id=concept1_id,
+        code_id=func_node_id,
         confidence=0.85,
-        evidence="Function implements neural network training"
+        evidence=["Function implements neural network training"]
     )
-    knowledge_graph.add_node(mapping_node)
-    knowledge_graph.add_edge(concept1.id, mapping_node.id, EdgeType.MAPS_TO)
-    knowledge_graph.add_edge(mapping_node.id, func_node.id, EdgeType.MAPS_TO)
-    
+
     return knowledge_graph
 
 
@@ -321,3 +300,470 @@ def reset_environment():
     yield
     os.environ.clear()
     os.environ.update(original_env)
+
+
+# ============================================================================
+# Sandbox Fixtures
+# ============================================================================
+
+@pytest.fixture
+def sandbox_config():
+    """Create a basic sandbox configuration for testing."""
+    from core.bubblewrap_sandbox import SandboxConfig, IsolationLevel
+    return SandboxConfig(
+        isolation_level=IsolationLevel.SUBPROCESS,
+        timeout_seconds=30,
+        memory_limit_mb=512,
+        network_enabled=False,
+        language="python"
+    )
+
+
+@pytest.fixture
+def mock_sandbox_manager():
+    """Create a mock sandbox manager."""
+    from core.bubblewrap_sandbox import ExecutionResult, IsolationLevel
+
+    manager = MagicMock()
+    manager.available_backends = [IsolationLevel.SUBPROCESS]
+    manager.best_backend = IsolationLevel.SUBPROCESS
+    manager.execute = AsyncMock(return_value=ExecutionResult(
+        success=True,
+        stdout="Test output",
+        stderr="",
+        exit_code=0,
+        execution_time=0.1,
+        isolation_level=IsolationLevel.SUBPROCESS
+    ))
+    manager.execute_code = AsyncMock(return_value=ExecutionResult(
+        success=True,
+        stdout="Code output",
+        stderr="",
+        exit_code=0,
+        execution_time=0.1,
+        isolation_level=IsolationLevel.SUBPROCESS
+    ))
+    return manager
+
+
+# ============================================================================
+# Checkpoint Fixtures
+# ============================================================================
+
+@pytest.fixture
+def checkpoint_manager(tmp_path):
+    """Create a checkpoint manager with temp directory."""
+    from core.checkpointing import CheckpointManager
+    return CheckpointManager(
+        checkpoint_dir=str(tmp_path / "checkpoints"),
+        max_checkpoints=5,
+        compress=True
+    )
+
+
+@pytest.fixture
+def sample_checkpoint_data():
+    """Sample data for checkpoint tests."""
+    return {
+        "paper_data": {
+            "title": "Test Paper on Neural Networks",
+            "abstract": "A" * 150,  # Meets minimum length requirement
+            "authors": ["Author One", "Author Two"],
+            "key_concepts": [{"name": "attention", "description": "Attention mechanism"}]
+        },
+        "repo_data": {
+            "name": "test-repo",
+            "url": "https://github.com/test/repo",
+            "overview": {"purpose": "Test repository"},
+            "dependencies": {"python": ["torch", "numpy"]}
+        },
+        "mappings": [
+            {
+                "concept_name": "attention",
+                "code_element": "Attention",
+                "code_file": "model.py",
+                "confidence": 0.85,
+                "evidence": ["Function implements attention mechanism"]
+            }
+        ]
+    }
+
+
+# ============================================================================
+# Metrics Fixtures
+# ============================================================================
+
+@pytest.fixture
+def metrics_collector():
+    """Create a fresh metrics collector."""
+    from core.metrics import MetricsCollector
+    return MetricsCollector(max_history=100)
+
+
+@pytest.fixture
+def populated_metrics_collector(metrics_collector):
+    """Create a metrics collector with sample data."""
+    from core.metrics import MetricType
+
+    # Add sample metrics
+    metrics_collector.record(MetricType.ACCURACY, "mapping_confidence", 0.85)
+    metrics_collector.record(MetricType.ACCURACY, "mapping_confidence", 0.92)
+    metrics_collector.record(MetricType.TIMING, "test_execution", 1500.0)
+    metrics_collector.record(MetricType.SUCCESS_RATE, "test_execution", 1.0)
+    metrics_collector.record(MetricType.SUCCESS_RATE, "test_execution", 0.0)
+
+    return metrics_collector
+
+
+# ============================================================================
+# Parser Fixtures
+# ============================================================================
+
+@pytest.fixture
+def parser_factory():
+    """Create a parser factory instance."""
+    from agents.parsers import ParserFactory
+    return ParserFactory()
+
+
+@pytest.fixture
+def sample_python_file(tmp_path):
+    """Create a sample Python file for parsing."""
+    content = '''"""Sample module docstring."""
+
+import os
+from typing import List
+
+CONSTANT_VALUE = 42
+
+class SampleClass:
+    """A sample class."""
+
+    def __init__(self, value: int):
+        self.value = value
+
+    def get_value(self) -> int:
+        """Get the value."""
+        return self.value
+
+def sample_function(arg1: str, arg2: int = 10) -> List[str]:
+    """A sample function."""
+    return [arg1] * arg2
+
+async def async_function():
+    """An async function."""
+    pass
+'''
+    file_path = tmp_path / "sample.py"
+    file_path.write_text(content)
+    return file_path
+
+
+@pytest.fixture
+def sample_julia_file(tmp_path):
+    """Create a sample Julia file for parsing."""
+    content = '''module SampleModule
+
+struct Point
+    x::Float64
+    y::Float64
+end
+
+function calculate_distance(p1::Point, p2::Point)::Float64
+    return sqrt((p2.x - p1.x)^2 + (p2.y - p1.y)^2)
+end
+
+end
+'''
+    file_path = tmp_path / "sample.jl"
+    file_path.write_text(content)
+    return file_path
+
+
+@pytest.fixture
+def sample_r_file(tmp_path):
+    """Create a sample R file for parsing."""
+    content = '''# Sample R file
+
+calculate_mean <- function(x) {
+    mean(x)
+}
+
+process_data <- function(data, threshold = 0.5) {
+    data[data > threshold]
+}
+'''
+    file_path = tmp_path / "sample.R"
+    file_path.write_text(content)
+    return file_path
+
+
+@pytest.fixture
+def sample_js_file(tmp_path):
+    """Create a sample JavaScript file for parsing."""
+    content = '''// Sample JavaScript file
+
+class Calculator {
+    constructor(value) {
+        this.value = value;
+    }
+
+    add(x) {
+        return this.value + x;
+    }
+}
+
+function multiply(a, b) {
+    return a * b;
+}
+
+const divide = (a, b) => a / b;
+
+export { Calculator, multiply, divide };
+'''
+    file_path = tmp_path / "sample.js"
+    file_path.write_text(content)
+    return file_path
+
+
+# ============================================================================
+# Orchestrator Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_orchestrator(mock_llm_client):
+    """Create a mock pipeline orchestrator."""
+    from core.orchestrator import PipelineOrchestrator, PipelineResult, PipelineStage
+
+    orchestrator = MagicMock(spec=PipelineOrchestrator)
+    orchestrator.llm_provider = "gemini"
+    orchestrator._current_stage = PipelineStage.INITIALIZED
+    orchestrator._current_progress = 0
+    orchestrator._event_callbacks = []
+
+    async def mock_run(*args, **kwargs):
+        return PipelineResult(
+            status="completed",
+            paper_data=None,
+            repo_data=None,
+            mappings=[],
+            code_results=[],
+            knowledge_graph=None
+        )
+
+    orchestrator.run = AsyncMock(side_effect=mock_run)
+    return orchestrator
+
+
+@pytest.fixture
+def pipeline_event_collector():
+    """Collect pipeline events for testing."""
+    events = []
+
+    async def callback(event):
+        events.append(event)
+
+    return {"callback": callback, "events": events}
+
+
+# ============================================================================
+# Resource Estimator Fixtures
+# ============================================================================
+
+@pytest.fixture
+def resource_estimator():
+    """Create a resource estimator instance."""
+    from core.resource_estimator import ResourceEstimator
+    return ResourceEstimator()
+
+
+@pytest.fixture
+def sample_repo_with_torch():
+    """Sample repo data with PyTorch dependencies."""
+    return {
+        "name": "torch-project",
+        "dependencies": {
+            "python": ["torch", "numpy", "transformers"]
+        },
+        "stats": {
+            "classes": 10,
+            "functions": 20
+        }
+    }
+
+
+@pytest.fixture
+def sample_repo_minimal():
+    """Sample repo data with minimal dependencies."""
+    return {
+        "name": "simple-project",
+        "dependencies": {
+            "python": ["requests", "json"]
+        },
+        "stats": {
+            "classes": 2,
+            "functions": 5
+        }
+    }
+
+
+# ============================================================================
+# LLM Client Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_llm_config():
+    """Create a mock LLM configuration."""
+    return {
+        "provider": "gemini",
+        "model": "gemini-pro",
+        "max_tokens": 4096,
+        "temperature": 0.7
+    }
+
+
+@pytest.fixture
+def mock_httpx_client():
+    """Create a mock httpx async client."""
+    import httpx
+
+    client = MagicMock(spec=httpx.AsyncClient)
+    client.post = AsyncMock()
+    client.get = AsyncMock()
+    client.aclose = AsyncMock()
+    return client
+
+
+# ============================================================================
+# Protocol Fixtures
+# ============================================================================
+
+@pytest.fixture
+def valid_paper_parser_output():
+    """Create a valid PaperParserOutput for testing."""
+    from agents.protocols import (
+        PaperParserOutput, Concept, Algorithm,
+        Methodology, Reproducibility, SourceMetadata
+    )
+    return PaperParserOutput(
+        title="Test Paper on Deep Learning",
+        authors=["Author One", "Author Two"],
+        abstract="A" * 150,  # Minimum 100 chars
+        key_concepts=[
+            Concept(name="attention", description="Attention mechanism")
+        ],
+        algorithms=[
+            Algorithm(name="transformer", description="Transformer architecture")
+        ],
+        methodology=Methodology(approach="Supervised learning"),
+        reproducibility=Reproducibility(code_available=True),
+        source_metadata=SourceMetadata(source_type="arxiv")
+    )
+
+
+@pytest.fixture
+def valid_repo_analyzer_output():
+    """Create a valid RepoAnalyzerOutput for testing."""
+    from agents.protocols import (
+        RepoAnalyzerOutput, OverviewInfo, KeyComponent,
+        DependencyInfo, FileStats
+    )
+    return RepoAnalyzerOutput(
+        name="test-repo",
+        url="https://github.com/test/repo",
+        overview=OverviewInfo(purpose="Test repository"),
+        key_components=[
+            KeyComponent(name="model", path="model.py", description="Model definitions")
+        ],
+        dependencies=DependencyInfo(python=["torch", "numpy"]),
+        stats=FileStats(total_files=10, code_files=5, classes=3, functions=15)
+    )
+
+
+@pytest.fixture
+def valid_mapping_result():
+    """Create a valid MappingResult for testing."""
+    from agents.protocols import MappingResult, MatchSignals
+    return MappingResult(
+        concept_name="attention",
+        concept_description="Attention mechanism from paper",
+        code_element="MultiHeadAttention",
+        code_file="model.py",
+        confidence=0.85,
+        match_signals=MatchSignals(lexical=0.7, semantic=0.9, documentary=0.8),
+        evidence=["Implements attention as described"],
+        reasoning="High semantic similarity with paper concept"
+    )
+
+
+# ============================================================================
+# QEMU Fixtures
+# ============================================================================
+
+@pytest.fixture
+def qemu_vm_config():
+    """Create a QEMU VM configuration for testing."""
+    from core.qemu_backend import QEMUVMConfig, ExecutionMode
+    return QEMUVMConfig(
+        name="test-vm",
+        memory="1G",
+        cpus=1,
+        timeout_seconds=60,
+        execution_mode=ExecutionMode.VIRTFS,
+        network_enabled=False
+    )
+
+
+@pytest.fixture
+def mock_qemu_image_manager(tmp_path):
+    """Create a mock QEMU image manager."""
+    manager = MagicMock()
+    manager.images_dir = tmp_path / "qemu-images"
+    manager.images_dir.mkdir(exist_ok=True)
+    manager.create_snapshot = MagicMock(return_value=tmp_path / "snapshot.qcow2")
+    manager.delete_snapshot = MagicMock(return_value=True)
+    manager.get_image_info = MagicMock(return_value={"format": "qcow2", "size": 1024})
+    return manager
+
+
+# ============================================================================
+# Schema Utils Fixtures
+# ============================================================================
+
+@pytest.fixture
+def sample_pydantic_model():
+    """Create a sample Pydantic model for schema testing."""
+    from pydantic import BaseModel, Field
+
+    class InnerModel(BaseModel):
+        value: int = Field(..., description="Inner value")
+
+    class OuterModel(BaseModel):
+        name: str = Field(..., description="Name field")
+        inner: InnerModel = Field(..., description="Nested model")
+        items: list = Field(default_factory=list, description="List of items")
+
+    return OuterModel
+
+
+# ============================================================================
+# Additional Pytest Markers
+# ============================================================================
+
+def pytest_configure(config):
+    """Configure pytest markers."""
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
+    config.addinivalue_line(
+        "markers", "integration: marks tests as integration tests"
+    )
+    config.addinivalue_line(
+        "markers", "requires_llm: marks tests that require an LLM API key"
+    )
+    config.addinivalue_line(
+        "markers", "sandbox: marks tests requiring sandbox execution"
+    )
+    config.addinivalue_line(
+        "markers", "qemu: marks tests requiring QEMU (very slow)"
+    )

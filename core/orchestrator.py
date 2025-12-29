@@ -5,10 +5,11 @@ Pipeline Orchestrator - Coordinates the multi-agent analysis pipeline.
 import asyncio
 import uuid
 from enum import Enum
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from pathlib import Path
+
+from pydantic import BaseModel, Field, ConfigDict
 
 from agents.protocols import (
     PaperParserOutput, RepoAnalyzerOutput,
@@ -49,48 +50,29 @@ STAGE_PROGRESS = {
 }
 
 
-@dataclass
-class PipelineEvent:
+class PipelineEvent(BaseModel):
     """Event emitted during pipeline execution."""
-    timestamp: datetime
-    stage: PipelineStage
-    progress: int
-    message: str
-    data: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "timestamp": self.timestamp.isoformat(),
-            "stage": self.stage.value,
-            "progress": self.progress,
-            "message": self.message,
-            "data": self.data
-        }
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime = Field(default_factory=datetime.now, description="Event timestamp")
+    stage: PipelineStage = Field(..., description="Pipeline stage")
+    progress: int = Field(..., ge=0, le=100, description="Progress percentage")
+    message: str = Field(..., description="Event message")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Additional data")
 
 
-@dataclass
-class PipelineResult:
+class PipelineResult(BaseModel):
     """Result returned by the pipeline."""
-    paper_data: Optional[PaperParserOutput] = None
-    repo_data: Optional[RepoAnalyzerOutput] = None
-    mappings: Optional[List[MappingResult]] = None
-    code_results: Optional[List[TestResult]] = None
-    knowledge_graph: Optional[KnowledgeGraph] = None
-    report_paths: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-    status: str = "completed"
+    model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dictionary for JSON/checkpoint storage."""
-        return {
-            "paper_data": self.paper_data.model_dump() if self.paper_data else None,
-            "repo_data": self.repo_data.model_dump() if self.repo_data else None,
-            "mappings": [m.model_dump() for m in self.mappings] if self.mappings else None,
-            "code_results": [r.model_dump() for r in self.code_results] if self.code_results else None,
-            "report_paths": self.report_paths,
-            "errors": self.errors,
-            "status": self.status
-        }
+    paper_data: Optional[PaperParserOutput] = Field(None, description="Parsed paper data")
+    repo_data: Optional[RepoAnalyzerOutput] = Field(None, description="Analyzed repo data")
+    mappings: Optional[List[MappingResult]] = Field(None, description="Concept mappings")
+    code_results: Optional[List[TestResult]] = Field(None, description="Code test results")
+    knowledge_graph: Optional[KnowledgeGraph] = Field(None, description="Knowledge graph")
+    report_paths: List[str] = Field(default_factory=list, description="Generated report paths")
+    errors: List[str] = Field(default_factory=list, description="Errors encountered")
+    status: str = Field("completed", description="Pipeline status")
 
 
 # Type for event callbacks

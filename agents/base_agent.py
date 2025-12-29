@@ -11,26 +11,12 @@ Provides:
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from datetime import datetime
-from dataclasses import dataclass
 
 from core.llm_client import LLMClient
 from core.knowledge_graph import KnowledgeGraph
 from core.error_handling import logger, LogCategory
 from core.metrics import get_metrics_collector
-
-
-@dataclass
-class AgentStats:
-    """Statistics for agent operations."""
-    operations: int = 0
-    total_duration_ms: float = 0
-    errors: int = 0
-    last_operation: Optional[datetime] = None
-
-    @property
-    def avg_duration_ms(self) -> float:
-        """Average duration per operation in milliseconds."""
-        return self.total_duration_ms / self.operations if self.operations > 0 else 0
+from agents.protocols import AgentStats
 
 
 class BaseAgent(ABC):
@@ -139,24 +125,22 @@ class BaseAgent(ABC):
 
     def get_stats(self) -> Dict[str, Any]:
         """Get agent performance statistics."""
-        return {
+        stats_dict = self._stats.model_dump()
+        stats_dict.update({
             "agent": self.name,
             "agent_id": self.agent_id,
             "type": self.agent_type,
-            "operation_count": self._stats.operations,
-            "operations": self._stats.operations,  # Alias for compatibility
-            "total_duration_ms": self._stats.total_duration_ms,
-            "avg_duration_ms": self._stats.avg_duration_ms,
-            "errors": self._stats.errors,
-            "last_operation": self._stats.last_operation.isoformat() if self._stats.last_operation else None
-        }
+            "operation_count": self._stats.operations,  # Alias for compatibility
+            "avg_duration_ms": self._stats.avg_duration_ms,  # Computed property
+        })
+        return stats_dict
 
     # ========================================================================
     # Abstract Method (subclasses must implement)
     # ========================================================================
 
     @abstractmethod
-    async def process(self, **kwargs) -> Dict[str, Any]:
+    async def process(self, **kwargs) -> Any:
         """
         Process input and produce output.
 
@@ -164,6 +148,6 @@ class BaseAgent(ABC):
         matching their input contract from agents/protocols.py.
 
         Returns:
-            Dictionary with agent-specific output
+            Agent-specific Pydantic output model (e.g., PaperParserOutput)
         """
         pass

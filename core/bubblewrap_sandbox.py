@@ -19,9 +19,10 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
+
+from pydantic import BaseModel, Field, ConfigDict
 
 from .error_handling import logger, LogCategory
 from .qemu_backend import (
@@ -43,40 +44,42 @@ class IsolationLevel(Enum):
     QEMU = "qemu"              # Full system virtualization
 
 
-@dataclass
-class SandboxConfig:
+class SandboxConfig(BaseModel):
     """Configuration for sandbox execution."""
-    isolation_level: IsolationLevel = IsolationLevel.SUBPROCESS
-    timeout_seconds: int = 120
-    memory_limit_mb: int = 2048
-    cpu_limit: float = 2.0
-    network_enabled: bool = False
-    read_only_paths: List[str] = field(default_factory=list)
-    read_write_paths: List[str] = field(default_factory=list)
-    env_vars: Dict[str, str] = field(default_factory=dict)
-    working_dir: str = "/workspace"
+    model_config = ConfigDict(extra="forbid")
+
+    isolation_level: IsolationLevel = Field(IsolationLevel.SUBPROCESS, description="Isolation level")
+    timeout_seconds: int = Field(120, ge=1, description="Execution timeout")
+    memory_limit_mb: int = Field(2048, ge=128, description="Memory limit in MB")
+    cpu_limit: float = Field(2.0, ge=0.1, description="CPU limit")
+    network_enabled: bool = Field(False, description="Whether network is enabled")
+    read_only_paths: List[str] = Field(default_factory=list, description="Read-only mount paths")
+    read_write_paths: List[str] = Field(default_factory=list, description="Read-write mount paths")
+    env_vars: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    working_dir: str = Field("/workspace", description="Working directory")
 
     # Language-specific settings
-    language: str = "python"
-    python_path: Optional[str] = None
+    language: str = Field("python", description="Programming language")
+    python_path: Optional[str] = Field(None, description="Python executable path")
 
     # QEMU-specific settings
-    qemu_image: Optional[str] = None
-    qemu_memory: str = "2G"
-    qemu_cpus: int = 2
+    qemu_image: Optional[str] = Field(None, description="QEMU image path")
+    qemu_memory: str = Field("2G", description="QEMU memory allocation")
+    qemu_cpus: int = Field(2, ge=1, description="QEMU CPU count")
 
 
-@dataclass
-class ExecutionResult:
+class ExecutionResult(BaseModel):
     """Result of sandboxed execution."""
-    success: bool
-    stdout: str = ""
-    stderr: str = ""
-    exit_code: int = -1
-    execution_time: float = 0.0
-    output_files: List[str] = field(default_factory=list)
-    error: Optional[str] = None
-    isolation_level: IsolationLevel = IsolationLevel.NONE
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool = Field(..., description="Whether execution succeeded")
+    stdout: str = Field("", description="Standard output")
+    stderr: str = Field("", description="Standard error")
+    exit_code: int = Field(-1, description="Process exit code")
+    execution_time: float = Field(0.0, ge=0, description="Execution time in seconds")
+    output_files: List[str] = Field(default_factory=list, description="Generated output files")
+    error: Optional[str] = Field(None, description="Error message")
+    isolation_level: IsolationLevel = Field(IsolationLevel.NONE, description="Isolation level used")
 
 
 class SandboxBackend(ABC):

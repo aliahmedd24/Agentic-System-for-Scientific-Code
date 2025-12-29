@@ -11,8 +11,9 @@ This module provides utilities for estimating:
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
-from dataclasses import dataclass, field
 from enum import Enum
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ComputeLevel(Enum):
@@ -24,34 +25,20 @@ class ComputeLevel(Enum):
     EXTREME = "extreme"      # > 64GB RAM, multi-GPU, > 6 hours
 
 
-@dataclass
-class ResourceEstimate:
+class ResourceEstimate(BaseModel):
     """Estimated resource requirements."""
-    compute_level: ComputeLevel = ComputeLevel.LOW
-    memory_gb: float = 2.0
-    gpu_required: bool = False
-    gpu_memory_gb: float = 0.0
-    estimated_time_minutes: float = 5.0
-    disk_space_gb: float = 1.0
-    dependency_count: int = 0
-    complexity_score: float = 0.5
-    warnings: List[str] = field(default_factory=list)
-    recommendations: List[str] = field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "compute_level": self.compute_level.value,
-            "memory_gb": self.memory_gb,
-            "gpu_required": self.gpu_required,
-            "gpu_memory_gb": self.gpu_memory_gb,
-            "estimated_time_minutes": self.estimated_time_minutes,
-            "disk_space_gb": self.disk_space_gb,
-            "dependency_count": self.dependency_count,
-            "complexity_score": self.complexity_score,
-            "warnings": self.warnings,
-            "recommendations": self.recommendations
-        }
+    compute_level: ComputeLevel = Field(ComputeLevel.LOW, description="Compute level")
+    memory_gb: float = Field(2.0, ge=0, description="Memory in GB")
+    gpu_required: bool = Field(False, description="Whether GPU is required")
+    gpu_memory_gb: float = Field(0.0, ge=0, description="GPU memory in GB")
+    estimated_time_minutes: float = Field(5.0, ge=0, description="Estimated time in minutes")
+    disk_space_gb: float = Field(1.0, ge=0, description="Disk space in GB")
+    dependency_count: int = Field(0, ge=0, description="Number of dependencies")
+    complexity_score: float = Field(0.5, ge=0, le=1, description="Complexity score 0-1")
+    warnings: List[str] = Field(default_factory=list, description="Resource warnings")
+    recommendations: List[str] = Field(default_factory=list, description="Recommendations")
 
     def is_feasible(self, available_memory_gb: float = 16.0, has_gpu: bool = False) -> bool:
         """Check if resources are available to run this task."""

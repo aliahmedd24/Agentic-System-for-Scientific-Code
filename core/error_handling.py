@@ -6,11 +6,12 @@ import logging
 import traceback
 import random
 from enum import Enum
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, TypeVar, Awaitable
 from functools import wraps
 import asyncio
+
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 
 # Type variable for generic function return types
 T = TypeVar('T')
@@ -54,57 +55,47 @@ class ErrorCategory(Enum):
     CONFIGURATION = "configuration"
 
 
-@dataclass
-class StructuredLog:
+class StructuredLog(BaseModel):
     """Structured log entry with full context."""
-    timestamp: datetime
-    level: LogLevel
-    category: LogCategory
-    agent: Optional[str] = None
-    stage: Optional[str] = None
-    message: str = ""
-    data: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[Exception] = None
-    duration_ms: Optional[int] = None
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "timestamp": self.timestamp.isoformat(),
-            "level": self.level.value,
-            "category": self.category.value,
-            "agent": self.agent,
-            "stage": self.stage,
-            "message": self.message,
-            "data": self.data,
-            "error": str(self.error) if self.error else None,
-            "duration_ms": self.duration_ms
-        }
+    timestamp: datetime = Field(..., description="Log timestamp")
+    level: LogLevel = Field(..., description="Log level")
+    category: LogCategory = Field(..., description="Log category")
+    agent: Optional[str] = Field(None, description="Agent name")
+    stage: Optional[str] = Field(None, description="Pipeline stage")
+    message: str = Field("", description="Log message")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Additional data")
+    error: Optional[Exception] = Field(None, description="Exception if any")
+    duration_ms: Optional[int] = Field(None, description="Duration in milliseconds")
+
+    @field_serializer('error')
+    def serialize_exception(self, exc: Optional[Exception]) -> Optional[str]:
+        """Serialize Exception to string for JSON compatibility."""
+        if exc is None:
+            return None
+        return f"{type(exc).__name__}: {str(exc)}"
 
 
-@dataclass
-class StructuredError:
+class StructuredError(BaseModel):
     """Structured error with context and recovery information."""
-    category: ErrorCategory
-    severity: ErrorSeverity
-    message: str
-    original_error: Optional[Exception] = None
-    context: Dict[str, Any] = field(default_factory=dict)
-    suggestion: str = ""
-    recoverable: bool = True
-    retry_allowed: bool = True
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "category": self.category.value,
-            "severity": self.severity.value,
-            "message": self.message,
-            "original_error": str(self.original_error) if self.original_error else None,
-            "context": self.context,
-            "suggestion": self.suggestion,
-            "recoverable": self.recoverable,
-            "retry_allowed": self.retry_allowed,
-            "traceback": traceback.format_exc() if self.original_error else None
-        }
+    category: ErrorCategory = Field(..., description="Error category")
+    severity: ErrorSeverity = Field(..., description="Error severity")
+    message: str = Field(..., description="Error message")
+    original_error: Optional[Exception] = Field(None, description="Original exception")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Error context")
+    suggestion: str = Field("", description="Suggested fix")
+    recoverable: bool = Field(True, description="Whether error is recoverable")
+    retry_allowed: bool = Field(True, description="Whether retry is allowed")
+
+    @field_serializer('original_error')
+    def serialize_exception(self, exc: Optional[Exception]) -> Optional[str]:
+        """Serialize Exception to string for JSON compatibility."""
+        if exc is None:
+            return None
+        return f"{type(exc).__name__}: {str(exc)}"
 
     def __str__(self) -> str:
         return f"[{self.severity.value.upper()}] {self.category.value}: {self.message}"
@@ -264,7 +255,7 @@ class SystemLogger:
 
     def get_recent_logs(self, count: int = 100) -> list[Dict]:
         """Get recent logs as dictionaries."""
-        return [log.to_dict() for log in self.logs[-count:]]
+        return [log.model_dump() for log in self.logs[-count:]]
 
 
 # Global logger instance

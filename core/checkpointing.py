@@ -13,11 +13,12 @@ import pickle
 import gzip
 import shutil
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
 import hashlib
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class CheckpointStage(Enum):
@@ -31,54 +32,31 @@ class CheckpointStage(Enum):
     COMPLETED = "completed"
 
 
-@dataclass
-class CheckpointMetadata:
+class CheckpointMetadata(BaseModel):
     """Metadata for a checkpoint."""
-    checkpoint_id: str
-    stage: CheckpointStage
-    created_at: datetime
-    paper_source: str
-    repo_url: str
-    data_size_bytes: int
-    is_compressed: bool = True
-    version: str = "1.0"
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "checkpoint_id": self.checkpoint_id,
-            "stage": self.stage.value,
-            "created_at": self.created_at.isoformat(),
-            "paper_source": self.paper_source,
-            "repo_url": self.repo_url,
-            "data_size_bytes": self.data_size_bytes,
-            "is_compressed": self.is_compressed,
-            "version": self.version
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CheckpointMetadata":
-        return cls(
-            checkpoint_id=data["checkpoint_id"],
-            stage=CheckpointStage(data["stage"]),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            paper_source=data["paper_source"],
-            repo_url=data["repo_url"],
-            data_size_bytes=data["data_size_bytes"],
-            is_compressed=data.get("is_compressed", True),
-            version=data.get("version", "1.0")
-        )
+    checkpoint_id: str = Field(..., description="Unique checkpoint ID")
+    stage: CheckpointStage = Field(..., description="Pipeline stage")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    paper_source: str = Field(..., description="Paper source path/URL")
+    repo_url: str = Field(..., description="Repository URL")
+    data_size_bytes: int = Field(..., description="Data size in bytes")
+    is_compressed: bool = Field(True, description="Whether data is compressed")
+    version: str = Field("1.0", description="Checkpoint format version")
 
 
-@dataclass
-class Checkpoint:
+class Checkpoint(BaseModel):
     """A pipeline checkpoint."""
-    metadata: CheckpointMetadata
-    paper_data: Optional[Dict[str, Any]] = None
-    repo_data: Optional[Dict[str, Any]] = None
-    mappings: Optional[List[Dict[str, Any]]] = None
-    code_results: Optional[List[Dict[str, Any]]] = None
-    knowledge_graph_data: Optional[Dict[str, Any]] = None
-    errors: List[str] = field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    metadata: CheckpointMetadata = Field(..., description="Checkpoint metadata")
+    paper_data: Optional[Dict[str, Any]] = Field(None, description="Parsed paper data")
+    repo_data: Optional[Dict[str, Any]] = Field(None, description="Analyzed repo data")
+    mappings: Optional[List[Dict[str, Any]]] = Field(None, description="Concept mappings")
+    code_results: Optional[List[Dict[str, Any]]] = Field(None, description="Code execution results")
+    knowledge_graph_data: Optional[Dict[str, Any]] = Field(None, description="Knowledge graph data")
+    errors: List[str] = Field(default_factory=list, description="Errors encountered")
 
 
 class CheckpointManager:
@@ -197,7 +175,7 @@ class CheckpointManager:
 
         # Save metadata file
         meta_path = pipeline_dir / f"{checkpoint_id}.meta.json"
-        meta_path.write_text(json.dumps(metadata.to_dict(), indent=2))
+        meta_path.write_text(json.dumps(metadata.model_dump(mode='json'), indent=2))
 
         # Cleanup old checkpoints
         self._cleanup_old_checkpoints(pipeline_dir)
@@ -225,7 +203,7 @@ class CheckpointManager:
             if meta_path.exists() and data_path.exists():
                 try:
                     # Load metadata
-                    metadata = CheckpointMetadata.from_dict(
+                    metadata = CheckpointMetadata.model_validate(
                         json.loads(meta_path.read_text())
                     )
 
@@ -276,7 +254,7 @@ class CheckpointManager:
         checkpoints = []
         for meta_path in pipeline_dir.glob("*.meta.json"):
             try:
-                metadata = CheckpointMetadata.from_dict(
+                metadata = CheckpointMetadata.model_validate(
                     json.loads(meta_path.read_text())
                 )
                 checkpoints.append(metadata)
@@ -316,7 +294,7 @@ class CheckpointManager:
         # Find checkpoint at this stage
         for meta_path in pipeline_dir.glob("*.meta.json"):
             try:
-                metadata = CheckpointMetadata.from_dict(
+                metadata = CheckpointMetadata.model_validate(
                     json.loads(meta_path.read_text())
                 )
                 if metadata.stage == stage:
@@ -356,7 +334,7 @@ class CheckpointManager:
 
             for meta_path in pipeline_dir.glob("*.meta.json"):
                 try:
-                    metadata = CheckpointMetadata.from_dict(
+                    metadata = CheckpointMetadata.model_validate(
                         json.loads(meta_path.read_text())
                     )
                     checkpoints.append(metadata)
@@ -423,7 +401,7 @@ class CheckpointManager:
         checkpoints = []
         for meta_path in meta_files:
             try:
-                metadata = CheckpointMetadata.from_dict(
+                metadata = CheckpointMetadata.model_validate(
                     json.loads(meta_path.read_text())
                 )
                 checkpoints.append((metadata, meta_path))

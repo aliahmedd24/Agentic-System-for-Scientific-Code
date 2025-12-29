@@ -10,10 +10,11 @@ This module provides:
 
 import time
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import statistics
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class MetricType(Enum):
@@ -25,39 +26,29 @@ class MetricType(Enum):
     TIMING = "timing"
 
 
-@dataclass
-class MetricDataPoint:
+class MetricDataPoint(BaseModel):
     """Single metric data point."""
-    timestamp: datetime
-    metric_type: MetricType
-    name: str
-    value: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime = Field(..., description="Measurement timestamp")
+    metric_type: MetricType = Field(..., description="Metric type")
+    name: str = Field(..., description="Metric name")
+    value: float = Field(..., description="Metric value")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
-@dataclass
-class AggregatedMetric:
+class AggregatedMetric(BaseModel):
     """Aggregated metric statistics."""
-    name: str
-    count: int
-    mean: float
-    std_dev: float
-    min_value: float
-    max_value: float
-    last_value: float
-    last_updated: datetime
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "count": self.count,
-            "mean": round(self.mean, 4),
-            "std_dev": round(self.std_dev, 4),
-            "min": round(self.min_value, 4),
-            "max": round(self.max_value, 4),
-            "last_value": round(self.last_value, 4),
-            "last_updated": self.last_updated.isoformat()
-        }
+    name: str = Field(..., description="Metric name")
+    count: int = Field(..., ge=0, description="Number of data points")
+    mean: float = Field(..., description="Mean value")
+    std_dev: float = Field(..., ge=0, description="Standard deviation")
+    min_value: float = Field(..., description="Minimum value")
+    max_value: float = Field(..., description="Maximum value")
+    last_value: float = Field(..., description="Most recent value")
+    last_updated: datetime = Field(..., description="Last update timestamp")
 
 
 class MetricsCollector:
@@ -190,7 +181,7 @@ class MetricsCollector:
         }
 
         for key, metric in metrics.items():
-            summary["metrics"][key] = metric.to_dict()
+            summary["metrics"][key] = metric.model_dump()
 
         # Calculate key statistics
         accuracy_metrics = [m for k, m in metrics.items() if "accuracy" in k.lower()]

@@ -6,11 +6,12 @@ BaseModels for strict typing, validation, and schema generation.
 """
 
 from typing import Protocol, Dict, Any, List, Optional, runtime_checkable
-from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
+
+from core.resource_estimator import ResourceEstimate
 
 
 # ============================================================================
@@ -338,15 +339,7 @@ class ExecutionSummary(BaseModel):
     total_time: float = Field(0.0, description="Total execution time in seconds")
 
 
-class ResourceEstimate(BaseModel):
-    """Resource usage estimate."""
-    model_config = ConfigDict(extra="forbid")
-
-    memory_gb: float = Field(0.0, description="Estimated memory usage in GB")
-    gpu_required: bool = Field(False, description="Whether GPU is required")
-    gpu_memory_gb: float = Field(0.0, description="Estimated GPU memory if needed")
-    complexity_score: float = Field(0.0, description="Complexity score 0-1")
-    warnings: List[str] = Field(default_factory=list, description="Resource warnings")
+# ResourceEstimate is imported from core.resource_estimator
 
 
 class CodingAgentInput(BaseModel):
@@ -374,29 +367,19 @@ class CodingAgentOutput(BaseModel):
 # Agent Statistics
 # ============================================================================
 
-@dataclass
-class AgentStats:
+class AgentStats(BaseModel):
     """Statistics for agent operations."""
-    operations: int = 0
-    total_duration_ms: float = 0
-    errors: int = 0
-    last_operation: Optional[datetime] = None
+    model_config = ConfigDict(extra="forbid")
+
+    operations: int = Field(0, description="Number of operations performed")
+    total_duration_ms: float = Field(0.0, description="Total duration in milliseconds")
+    errors: int = Field(0, description="Number of errors encountered")
+    last_operation: Optional[datetime] = Field(None, description="Timestamp of last operation")
 
     @property
     def avg_duration_ms(self) -> float:
         """Average duration per operation in milliseconds."""
         return self.total_duration_ms / self.operations if self.operations > 0 else 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "operations": self.operations,
-            "operation_count": self.operations,  # Alias for compatibility
-            "total_duration_ms": self.total_duration_ms,
-            "avg_duration_ms": self.avg_duration_ms,
-            "errors": self.errors,
-            "last_operation": self.last_operation.isoformat() if self.last_operation else None
-        }
 
 
 # ============================================================================
@@ -476,59 +459,32 @@ def validate_coding_agent_input(kwargs: Dict[str, Any]) -> CodingAgentInput:
 # Code Element Types (for multi-language parsing)
 # ============================================================================
 
-@dataclass
-class CodeElement:
+class CodeElement(BaseModel):
     """Represents a parsed code element from any language."""
-    name: str
-    element_type: str  # "class", "function", "struct", "type", etc.
-    file_path: str
-    line_number: int
-    docstring: str = ""
-    signature: str = ""
-    args: List[str] = field(default_factory=list)
-    return_type: str = ""
-    decorators: List[str] = field(default_factory=list)
-    bases: List[str] = field(default_factory=list)  # For classes
-    methods: List[str] = field(default_factory=list)  # For classes
-    language: str = "python"
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "name": self.name,
-            "type": self.element_type,
-            "file_path": self.file_path,
-            "line_number": self.line_number,
-            "docstring": self.docstring,
-            "signature": self.signature,
-            "args": self.args,
-            "return_type": self.return_type,
-            "decorators": self.decorators,
-            "bases": self.bases,
-            "methods": self.methods,
-            "language": self.language
-        }
+    name: str = Field(..., description="Element name")
+    element_type: str = Field(..., description="Type: class, function, struct, type, etc.")
+    file_path: str = Field(..., description="Path to source file")
+    line_number: int = Field(0, description="Line number where defined")
+    docstring: str = Field("", description="Documentation string")
+    signature: str = Field("", description="Function/method signature")
+    args: List[str] = Field(default_factory=list, description="Function arguments")
+    return_type: str = Field("", description="Return type annotation")
+    decorators: List[str] = Field(default_factory=list, description="Decorators applied")
+    bases: List[str] = Field(default_factory=list, description="Base classes (for classes)")
+    methods: List[str] = Field(default_factory=list, description="Methods (for classes)")
+    language: str = Field("python", description="Programming language")
 
 
-@dataclass
-class ParsedFile:
+class ParsedFile(BaseModel):
     """Result of parsing a single source file."""
-    file_path: str
-    language: str
-    classes: List[CodeElement] = field(default_factory=list)
-    functions: List[CodeElement] = field(default_factory=list)
-    imports: List[Dict[str, Any]] = field(default_factory=list)
-    constants: List[Dict[str, Any]] = field(default_factory=list)
-    parse_errors: List[str] = field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "file_path": self.file_path,
-            "language": self.language,
-            "classes": [c.to_dict() for c in self.classes],
-            "functions": [f.to_dict() for f in self.functions],
-            "imports": self.imports,
-            "constants": self.constants,
-            "parse_errors": self.parse_errors
-        }
+    file_path: str = Field(..., description="Path to the parsed file")
+    language: str = Field(..., description="Programming language")
+    classes: List[CodeElement] = Field(default_factory=list, description="Parsed classes")
+    functions: List[CodeElement] = Field(default_factory=list, description="Parsed functions")
+    imports: List[Dict[str, Any]] = Field(default_factory=list, description="Import statements")
+    constants: List[Dict[str, Any]] = Field(default_factory=list, description="Constants defined")
+    parse_errors: List[str] = Field(default_factory=list, description="Parsing errors encountered")

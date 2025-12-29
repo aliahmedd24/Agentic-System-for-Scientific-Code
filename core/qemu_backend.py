@@ -29,9 +29,10 @@ import uuid
 import platform
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
-from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
+
+from pydantic import BaseModel, Field, ConfigDict
 import time
 
 from .error_handling import logger, LogCategory, create_error, ErrorCategory
@@ -64,63 +65,65 @@ class ExecutionMode(Enum):
     CLOUDINIT = "cloudinit"  # Via cloud-init userdata
 
 
-@dataclass
-class QEMUVMConfig:
+class QEMUVMConfig(BaseModel):
     """Extended configuration for QEMU virtual machines."""
+    model_config = ConfigDict(extra="forbid")
+
     # Basic VM settings
-    name: str = "sandbox-vm"
-    memory: str = "2G"
-    cpus: int = 2
-    cpu_model: str = "host"  # or "qemu64" for TCG
+    name: str = Field("sandbox-vm", description="VM name")
+    memory: str = Field("2G", description="Memory allocation")
+    cpus: int = Field(2, ge=1, description="Number of CPUs")
+    cpu_model: str = Field("host", description="CPU model (or 'qemu64' for TCG)")
 
     # Disk configuration
-    disk_image: Optional[str] = None
-    disk_size: str = "10G"
-    disk_format: str = "qcow2"
-    use_snapshot: bool = True  # Use snapshots for fast reset
+    disk_image: Optional[str] = Field(None, description="Disk image path")
+    disk_size: str = Field("10G", description="Disk size")
+    disk_format: str = Field("qcow2", description="Disk format")
+    use_snapshot: bool = Field(True, description="Use snapshots for fast reset")
 
     # Network configuration
-    network_enabled: bool = False
-    network_type: str = "user"  # user, tap, bridge
-    ssh_port: int = 0  # 0 = auto-assign
+    network_enabled: bool = Field(False, description="Enable networking")
+    network_type: str = Field("user", description="Network type (user, tap, bridge)")
+    ssh_port: int = Field(0, ge=0, description="SSH port (0 for auto-assign)")
 
     # Display/console
-    display: str = "none"  # none, vnc, sdl
-    serial_console: bool = True
+    display: str = Field("none", description="Display type (none, vnc, sdl)")
+    serial_console: bool = Field(True, description="Enable serial console")
 
     # File sharing
-    shared_dir: Optional[str] = None
-    shared_mount_tag: str = "hostshare"
+    shared_dir: Optional[str] = Field(None, description="Shared directory path")
+    shared_mount_tag: str = Field("hostshare", description="Shared mount tag")
 
     # Execution
-    execution_mode: ExecutionMode = ExecutionMode.VIRTFS
-    timeout_seconds: int = 120
+    execution_mode: ExecutionMode = Field(ExecutionMode.VIRTFS, description="Execution mode")
+    timeout_seconds: int = Field(120, ge=1, description="Timeout in seconds")
 
     # Guest OS settings
-    guest_user: str = "sandbox"
-    guest_password: str = "sandbox"
-    guest_workdir: str = "/sandbox"
+    guest_user: str = Field("sandbox", description="Guest username")
+    guest_password: str = Field("sandbox", description="Guest password")
+    guest_workdir: str = Field("/sandbox", description="Guest working directory")
 
     # Acceleration
-    accelerator: Optional[QEMUAccelerator] = None
+    accelerator: Optional[QEMUAccelerator] = Field(None, description="Hardware accelerator")
 
     # QEMU paths (auto-detected if not specified)
-    qemu_binary: Optional[str] = None
-    qemu_img_binary: Optional[str] = None
+    qemu_binary: Optional[str] = Field(None, description="QEMU binary path")
+    qemu_img_binary: Optional[str] = Field(None, description="QEMU-img binary path")
 
 
-@dataclass
-class QEMUExecutionResult:
+class QEMUExecutionResult(BaseModel):
     """Result of execution within QEMU VM."""
-    success: bool
-    stdout: str = ""
-    stderr: str = ""
-    exit_code: int = -1
-    execution_time: float = 0.0
-    vm_boot_time: float = 0.0
-    output_files: List[str] = field(default_factory=list)
-    error: Optional[str] = None
-    vm_state: VMState = VMState.STOPPED
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool = Field(..., description="Whether execution succeeded")
+    stdout: str = Field("", description="Standard output")
+    stderr: str = Field("", description="Standard error")
+    exit_code: int = Field(-1, description="Exit code")
+    execution_time: float = Field(0.0, ge=0, description="Execution time in seconds")
+    vm_boot_time: float = Field(0.0, ge=0, description="VM boot time in seconds")
+    output_files: List[str] = Field(default_factory=list, description="Output files")
+    error: Optional[str] = Field(None, description="Error message")
+    vm_state: VMState = Field(VMState.STOPPED, description="Final VM state")
 
 
 class QEMUImageManager:
@@ -1137,7 +1140,7 @@ class QEMUPool:
 
         for i in range(self.pool_size):
             vm_config = QEMUVMConfig(**{
-                **self.config.__dict__,
+                **self.config.model_dump(),
                 "name": f"{self.config.name}_{i}"
             })
 

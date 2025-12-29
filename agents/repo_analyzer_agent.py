@@ -404,13 +404,13 @@ class RepoAnalyzerAgent(BaseAgent):
         # Convert CodeElement objects to dicts for JSON serialization
         for cls in parsed.get("classes", []):
             if isinstance(cls, CodeElement):
-                elements["classes"].append(cls.to_dict())
+                elements["classes"].append(cls.model_dump())
             else:
                 elements["classes"].append(cls)
 
         for func in parsed.get("functions", []):
             if isinstance(func, CodeElement):
-                elements["functions"].append(func.to_dict())
+                elements["functions"].append(func.model_dump())
             else:
                 elements["functions"].append(func)
 

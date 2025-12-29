@@ -5,13 +5,13 @@ Knowledge Graph - Shared memory system for the multi-agent pipeline.
 import json
 import uuid
 from enum import Enum
-from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set, Tuple
 from pathlib import Path
 
 import networkx as nx
 import numpy as np
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class NodeType(Enum):
@@ -62,45 +62,30 @@ class EdgeType(Enum):
     DESCRIBES = "describes"
 
 
-@dataclass
-class KGNode:
+class KGNode(BaseModel):
     """Knowledge graph node with metadata."""
-    id: str
-    type: NodeType
-    name: str
-    description: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    embedding: Optional[List[float]] = None
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        d['type'] = self.type.value
-        d['created_at'] = self.created_at.isoformat()
-        d['updated_at'] = self.updated_at.isoformat()
-        # Don't serialize embeddings by default (too large)
-        if 'embedding' in d:
-            d['has_embedding'] = d['embedding'] is not None
-            del d['embedding']
-        return d
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="Unique node identifier")
+    type: NodeType = Field(..., description="Node type")
+    name: str = Field(..., description="Node name")
+    description: str = Field("", description="Node description")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    embedding: Optional[List[float]] = Field(None, description="Vector embedding")
+    created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
+    updated_at: datetime = Field(default_factory=datetime.now, description="Update timestamp")
 
 
-@dataclass
-class KGEdge:
+class KGEdge(BaseModel):
     """Knowledge graph edge with metadata."""
-    source: str
-    target: str
-    type: EdgeType
-    weight: float = 1.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        d['type'] = self.type.value
-        d['created_at'] = self.created_at.isoformat()
-        return d
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(..., description="Source node ID")
+    target: str = Field(..., description="Target node ID")
+    type: EdgeType = Field(..., description="Edge type")
+    weight: float = Field(1.0, description="Edge weight")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
 
 
 class KnowledgeGraph:
@@ -360,18 +345,18 @@ class KnowledgeGraph:
     def to_json(self) -> str:
         """Serialize graph to JSON."""
         data = {
-            "nodes": [node.to_dict() for node in self._node_registry.values()],
+            "nodes": [node.model_dump(mode='json', exclude={'embedding'}) for node in self._node_registry.values()],
             "edges": [],
             "statistics": self.get_statistics()
         }
-        
+
         for source, target, edge_data in self.graph.edges(data=True):
             data["edges"].append({
                 "source": source,
                 "target": target,
                 **edge_data
             })
-        
+
         return json.dumps(data, indent=2, default=str)
     
     @classmethod

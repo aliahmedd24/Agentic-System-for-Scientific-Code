@@ -604,7 +604,7 @@ async def get_agent_metrics():
 
     # Filter to agent-related metrics
     agent_metrics = {
-        key: metric.to_dict()
+        key: metric.model_dump()
         for key, metric in all_metrics.items()
         if "agent" in key.lower()
     }
@@ -623,7 +623,7 @@ async def get_pipeline_metrics():
 
     # Filter to pipeline-related metrics
     pipeline_metrics = {
-        key: metric.to_dict()
+        key: metric.model_dump()
         for key, metric in all_metrics.items()
         if "pipeline" in key.lower()
     }

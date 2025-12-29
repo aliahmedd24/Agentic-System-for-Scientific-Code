@@ -1,0 +1,10 @@
+{
+  "checkpoint_id": "ckpt_concepts_mapped_80df97e20e2f",
+  "stage": "concepts_mapped",
+  "created_at": "2025-12-29T06:48:14.815589",
+  "paper_source": "test.pdf",
+  "repo_url": "https://github.com/test/repo",
+  "data_size_bytes": 989,
+  "is_compressed": true,
+  "version": "1.0"
+}

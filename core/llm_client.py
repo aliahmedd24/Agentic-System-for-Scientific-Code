@@ -7,10 +7,10 @@ import json
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, AsyncIterator, Type
-from dataclasses import dataclass
 from enum import Enum
 
 import httpx
+from pydantic import BaseModel, Field, ConfigDict
 
 # Load environment variables from .env file
 try:
@@ -31,15 +31,16 @@ class LLMProvider(Enum):
     OPENAI = "openai"
 
 
-@dataclass
-class LLMConfig:
+class LLMConfig(BaseModel):
     """Configuration for LLM providers."""
-    provider: LLMProvider
-    api_key: str
-    model: str
-    max_tokens: int = 8192
-    temperature: float = 0.7
-    timeout: int = 120
+    model_config = ConfigDict(extra="forbid")
+
+    provider: LLMProvider = Field(..., description="LLM provider")
+    api_key: str = Field(..., min_length=1, description="API key")
+    model: str = Field(..., min_length=1, description="Model name")
+    max_tokens: int = Field(8192, ge=1, description="Maximum tokens")
+    temperature: float = Field(0.7, ge=0, le=2, description="Sampling temperature")
+    timeout: int = Field(120, ge=1, description="Request timeout in seconds")
 
 
 class BaseLLMProvider(ABC):

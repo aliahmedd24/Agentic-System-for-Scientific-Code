@@ -80,8 +80,8 @@ class TestStructuredLog:
             category=LogCategory.AGENT,
             message="Processing"
         )
-        
-        log_dict = log.to_dict()
+
+        log_dict = log.model_dump()
         
         assert "level" in log_dict
         assert "category" in log_dict

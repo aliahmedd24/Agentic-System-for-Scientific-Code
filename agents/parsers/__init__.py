@@ -14,41 +14,26 @@ Supported languages:
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
-@dataclass
-class CodeElement:
+class CodeElement(BaseModel):
     """Represents a parsed code element from any language."""
-    name: str
-    element_type: str  # "class", "function", "struct", "type", etc.
-    file_path: str
-    line_number: int
-    docstring: str = ""
-    signature: str = ""
-    args: List[str] = field(default_factory=list)
-    return_type: str = ""
-    decorators: List[str] = field(default_factory=list)
-    bases: List[str] = field(default_factory=list)  # For classes
-    methods: List[str] = field(default_factory=list)  # For classes
-    language: str = "python"
+    model_config = ConfigDict(extra="forbid")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "name": self.name,
-            "type": self.element_type,
-            "file_path": self.file_path,
-            "line_number": self.line_number,
-            "docstring": self.docstring,
-            "signature": self.signature,
-            "args": self.args,
-            "return_type": self.return_type,
-            "decorators": self.decorators,
-            "bases": self.bases,
-            "methods": self.methods,
-            "language": self.language
-        }
+    name: str = Field(..., description="Element name")
+    element_type: str = Field(..., description="Type: class, function, struct, type, etc.")
+    file_path: str = Field(..., description="Path to source file")
+    line_number: int = Field(0, description="Line number where defined")
+    docstring: str = Field("", description="Documentation string")
+    signature: str = Field("", description="Function/method signature")
+    args: List[str] = Field(default_factory=list, description="Function arguments")
+    return_type: str = Field("", description="Return type annotation")
+    decorators: List[str] = Field(default_factory=list, description="Decorators applied")
+    bases: List[str] = Field(default_factory=list, description="Base classes (for classes)")
+    methods: List[str] = Field(default_factory=list, description="Methods (for classes)")
+    language: str = Field("python", description="Programming language")
 
 
 class LanguageParser(ABC):
