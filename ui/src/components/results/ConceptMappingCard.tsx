@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { ChevronDownIcon, ChevronUpIcon, CodeBracketIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/cn'
 import { GlassCard } from '@/components/ui/GlassCard'
-import { ConfidenceMeter } from '@/components/data-display/ConfidenceMeter'
 import type { MappingResult } from '@/api/types'
 
 interface ConceptMappingCardProps {

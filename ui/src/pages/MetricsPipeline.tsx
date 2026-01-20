@@ -1,9 +1,16 @@
 import { useEffect } from 'react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { GlassCard } from '@/components/ui/GlassCard'
+import { KPICard, PipelineChart } from '@/components/metrics'
 import { useMetricsStore } from '@/stores/metricsStore'
 import { formatDuration, formatPercent } from '@/lib/formatters'
-import { BeakerIcon, ChartBarIcon } from '@heroicons/react/24/outline'
+import {
+  BeakerIcon,
+  ChartBarIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  ArrowTrendingUpIcon,
+} from '@heroicons/react/24/outline'
 
 export default function MetricsPipeline() {
   const { pipelineMetrics, fetchPipelineMetrics, isLoadingPipeline } = useMetricsStore()
@@ -11,6 +18,13 @@ export default function MetricsPipeline() {
   useEffect(() => {
     fetchPipelineMetrics()
   }, [])
+
+  // Calculate summary stats (totalExecutions reserved for future use)
+  void (pipelineMetrics?.stages.reduce((sum, s) => sum + s.count, 0) || 0)
+  const avgSuccessRate = pipelineMetrics?.stages.length
+    ? pipelineMetrics.stages.reduce((sum, s) => sum + s.success_rate, 0) / pipelineMetrics.stages.length
+    : 0
+  const totalDuration = pipelineMetrics?.stages.reduce((sum, s) => sum + s.avg_duration_ms, 0) || 0
 
   return (
     <div className="animate-in">
@@ -25,11 +39,13 @@ export default function MetricsPipeline() {
       />
 
       {isLoadingPipeline ? (
-        <div className="py-16 text-center text-text-muted">Loading pipeline metrics...</div>
+        <div className="py-16 text-center text-text-muted" role="status" aria-live="polite">
+          Loading pipeline metrics...
+        </div>
       ) : !pipelineMetrics || pipelineMetrics.stages.length === 0 ? (
         <GlassCard>
           <div className="py-16 text-center">
-            <BeakerIcon className="h-16 w-16 mx-auto text-text-muted mb-4" />
+            <BeakerIcon className="h-16 w-16 mx-auto text-text-muted mb-4" aria-hidden="true" />
             <h3 className="text-heading-3 text-text-primary mb-2">No Pipeline Data</h3>
             <p className="text-body text-text-secondary">
               Run some analyses to see pipeline metrics
@@ -38,39 +54,107 @@ export default function MetricsPipeline() {
         </GlassCard>
       ) : (
         <div className="space-y-6">
-          {/* Accuracy Score */}
-          <GlassCard>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-heading-3 text-text-primary">Overall Accuracy Score</h3>
-                <p className="text-body-sm text-text-secondary mt-1">
-                  Aggregate mapping accuracy across all jobs
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-display text-accent-primary">
-                  {formatPercent(pipelineMetrics.accuracy_score)}
-                </p>
-              </div>
-            </div>
-          </GlassCard>
+          {/* Summary KPI Cards */}
+          <div
+            className="grid grid-cols-1 md:grid-cols-4 gap-6"
+            role="region"
+            aria-label="Pipeline summary statistics"
+          >
+            <KPICard
+              title="Accuracy Score"
+              value={formatPercent(pipelineMetrics.accuracy_score)}
+              icon={<ArrowTrendingUpIcon className="h-6 w-6" />}
+              iconBgColor="bg-accent-primary/20"
+              iconColor="text-accent-primary"
+              trend={{
+                value: Math.round(pipelineMetrics.accuracy_score * 100),
+                direction:
+                  pipelineMetrics.accuracy_score >= 0.8
+                    ? 'up'
+                    : pipelineMetrics.accuracy_score >= 0.6
+                    ? 'neutral'
+                    : 'down',
+              }}
+            />
+            <KPICard
+              title="Total Stages"
+              value={pipelineMetrics.stages.length}
+              icon={<BeakerIcon className="h-6 w-6" />}
+              iconBgColor="bg-status-info/20"
+              iconColor="text-status-info"
+            />
+            <KPICard
+              title="Avg Success Rate"
+              value={formatPercent(avgSuccessRate)}
+              icon={<CheckCircleIcon className="h-6 w-6" />}
+              iconBgColor="bg-status-success/20"
+              iconColor="text-status-success"
+            />
+            <KPICard
+              title="Total Pipeline Time"
+              value={formatDuration(totalDuration)}
+              icon={<ClockIcon className="h-6 w-6" />}
+              iconBgColor="bg-status-warning/20"
+              iconColor="text-status-warning"
+              subtitle="Average per job"
+            />
+          </div>
 
-          {/* Stage Metrics */}
-          <GlassCard title="Stage Performance" icon={<ChartBarIcon className="h-5 w-5" />} noPadding>
+          {/* D3.js Pipeline Chart */}
+          <PipelineChart stages={pipelineMetrics.stages} />
+
+          {/* Stage Metrics Table */}
+          <GlassCard
+            title="Stage Performance"
+            icon={<ChartBarIcon className="h-5 w-5" />}
+            noPadding
+          >
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table
+                className="w-full"
+                role="table"
+                aria-label="Pipeline stage performance details"
+              >
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="px-6 py-4 text-left text-body-sm font-semibold text-text-secondary">Stage</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Executions</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Avg Duration</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Success Rate</th>
-                    <th className="px-6 py-4 text-left text-body-sm font-semibold text-text-secondary">Performance</th>
+                    <th
+                      scope="col"
+                      className="px-6 py-4 text-left text-body-sm font-semibold text-text-secondary"
+                    >
+                      Stage
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary"
+                    >
+                      Executions
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary"
+                    >
+                      Avg Duration
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary"
+                    >
+                      Success Rate
+                    </th>
+                    <th
+                      scope="col"
+                      className="px-6 py-4 text-left text-body-sm font-semibold text-text-secondary"
+                    >
+                      Performance
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {pipelineMetrics.stages.map((stage) => (
-                    <tr key={stage.stage} className="border-b border-border/50 hover:bg-bg-tertiary/30">
+                    <tr
+                      key={stage.stage}
+                      className="border-b border-border/50 hover:bg-bg-tertiary/30"
+                    >
                       <td className="px-6 py-4">
                         <span className="text-body-sm font-medium text-text-primary capitalize">
                           {stage.stage.replace(/_/g, ' ')}
@@ -85,22 +169,35 @@ export default function MetricsPipeline() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <span className={`text-body-sm ${
-                          stage.success_rate >= 0.9 ? 'text-status-success' :
-                          stage.success_rate >= 0.7 ? 'text-status-warning' :
-                          'text-status-error'
-                        }`}>
+                        <span
+                          className={`text-body-sm ${
+                            stage.success_rate >= 0.9
+                              ? 'text-status-success'
+                              : stage.success_rate >= 0.7
+                              ? 'text-status-warning'
+                              : 'text-status-error'
+                          }`}
+                        >
                           {formatPercent(stage.success_rate)}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <div className="w-32 h-2 bg-bg-tertiary rounded-full overflow-hidden">
+                          <div
+                            className="w-32 h-2 bg-bg-tertiary rounded-full overflow-hidden"
+                            role="progressbar"
+                            aria-valuenow={Math.round(stage.success_rate * 100)}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label={`${stage.stage} success rate: ${formatPercent(stage.success_rate)}`}
+                          >
                             <div
                               className={`h-full rounded-full ${
-                                stage.success_rate >= 0.9 ? 'bg-status-success' :
-                                stage.success_rate >= 0.7 ? 'bg-status-warning' :
-                                'bg-status-error'
+                                stage.success_rate >= 0.9
+                                  ? 'bg-status-success'
+                                  : stage.success_rate >= 0.7
+                                  ? 'bg-status-warning'
+                                  : 'bg-status-error'
                               }`}
                               style={{ width: `${stage.success_rate * 100}%` }}
                             />
@@ -111,36 +208,6 @@ export default function MetricsPipeline() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </GlassCard>
-
-          {/* Timing Chart Placeholder */}
-          <GlassCard title="Stage Timing Distribution">
-            <div className="space-y-4">
-              {pipelineMetrics.stages.map((stage) => {
-                const maxDuration = Math.max(...pipelineMetrics.stages.map((s) => s.avg_duration_ms))
-                const widthPercent = (stage.avg_duration_ms / maxDuration) * 100
-
-                return (
-                  <div key={stage.stage} className="flex items-center gap-4">
-                    <div className="w-32 text-body-sm text-text-secondary capitalize">
-                      {stage.stage.replace(/_/g, ' ')}
-                    </div>
-                    <div className="flex-1">
-                      <div className="h-8 bg-bg-tertiary rounded-lg overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-accent-primary to-purple-500 rounded-lg flex items-center justify-end px-2"
-                          style={{ width: `${widthPercent}%` }}
-                        >
-                          <span className="text-caption text-white font-medium">
-                            {formatDuration(stage.avg_duration_ms)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
             </div>
           </GlassCard>
         </div>

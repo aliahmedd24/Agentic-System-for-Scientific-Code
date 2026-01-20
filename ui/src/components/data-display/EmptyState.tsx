@@ -1,11 +1,17 @@
 import { cn } from '@/lib/cn'
+import { Button } from '@/components/ui/Button'
 import { InboxIcon } from '@heroicons/react/24/outline'
 
+interface ActionConfig {
+  label: string
+  onClick: () => void
+}
+
 interface EmptyStateProps {
-  icon?: React.ReactNode
+  icon?: React.ReactNode | 'error' | 'search' | 'document'
   title: string
   description?: string
-  action?: React.ReactNode
+  action?: React.ReactNode | ActionConfig
   size?: 'sm' | 'md' | 'lg'
   className?: string
 }
@@ -31,6 +37,15 @@ const sizeStyles = {
   },
 }
 
+function isActionConfig(action: unknown): action is ActionConfig {
+  return (
+    typeof action === 'object' &&
+    action !== null &&
+    'label' in action &&
+    'onClick' in action
+  )
+}
+
 export function EmptyState({
   icon,
   title,
@@ -40,6 +55,19 @@ export function EmptyState({
   className,
 }: EmptyStateProps) {
   const styles = sizeStyles[size]
+
+  // Render action - either as JSX or from config object
+  const renderAction = () => {
+    if (!action) return null
+    if (isActionConfig(action)) {
+      return (
+        <Button onClick={action.onClick}>
+          {action.label}
+        </Button>
+      )
+    }
+    return action
+  }
 
   return (
     <div className={cn('text-center', styles.container, className)}>
@@ -56,7 +84,7 @@ export function EmptyState({
           {description}
         </p>
       )}
-      {action && <div className="flex justify-center">{action}</div>}
+      {action && <div className="flex justify-center">{renderAction()}</div>}
     </div>
   )
 }

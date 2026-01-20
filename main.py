@@ -38,8 +38,8 @@ from core.orchestrator import PipelineOrchestrator, PipelineEvent, PipelineStage
 from core.error_handling import SystemLogger, LogCategory
 
 
-# Console for rich output
-console = Console() if RICH_AVAILABLE else None
+# Console for rich output (force_terminal for Windows compatibility)
+console = Console(force_terminal=True, legacy_windows=False) if RICH_AVAILABLE else None
 
 
 def print_banner():

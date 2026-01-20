@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { GlassCard } from '@/components/ui/GlassCard'
+import { KPICard, AgentTable } from '@/components/metrics'
 import { useMetricsStore } from '@/stores/metricsStore'
-import { formatDuration, formatNumber } from '@/lib/formatters'
-import { CpuChipIcon } from '@heroicons/react/24/outline'
+import { formatNumber } from '@/lib/formatters'
+import { CpuChipIcon, ClockIcon, ExclamationTriangleIcon, CheckCircleIcon } from '@heroicons/react/24/outline'
 
 export default function MetricsAgents() {
   const { agentMetrics, fetchAgentMetrics, isLoadingAgents } = useMetricsStore()
@@ -11,6 +12,14 @@ export default function MetricsAgents() {
   useEffect(() => {
     fetchAgentMetrics()
   }, [])
+
+  // Calculate summary stats
+  const totalOperations = agentMetrics?.agents.reduce((sum, a) => sum + a.operations, 0) || 0
+  const totalErrors = agentMetrics?.agents.reduce((sum, a) => sum + a.errors, 0) || 0
+  const avgDuration = agentMetrics?.agents.length
+    ? agentMetrics.agents.reduce((sum, a) => sum + a.avg_duration_ms, 0) / agentMetrics.agents.length
+    : 0
+  const errorRate = totalOperations > 0 ? (totalErrors / totalOperations) * 100 : 0
 
   return (
     <div className="animate-in">
@@ -25,11 +34,13 @@ export default function MetricsAgents() {
       />
 
       {isLoadingAgents ? (
-        <div className="py-16 text-center text-text-muted">Loading agent metrics...</div>
+        <div className="py-16 text-center text-text-muted" role="status" aria-live="polite">
+          Loading agent metrics...
+        </div>
       ) : !agentMetrics || agentMetrics.agents.length === 0 ? (
         <GlassCard>
           <div className="py-16 text-center">
-            <CpuChipIcon className="h-16 w-16 mx-auto text-text-muted mb-4" />
+            <CpuChipIcon className="h-16 w-16 mx-auto text-text-muted mb-4" aria-hidden="true" />
             <h3 className="text-heading-3 text-text-primary mb-2">No Agent Data</h3>
             <p className="text-body text-text-secondary">
               Run some analyses to see agent performance metrics
@@ -38,13 +49,58 @@ export default function MetricsAgents() {
         </GlassCard>
       ) : (
         <div className="space-y-6">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          {/* Summary KPI Cards */}
+          <div
+            className="grid grid-cols-1 md:grid-cols-4 gap-6"
+            role="region"
+            aria-label="Agent summary statistics"
+          >
+            <KPICard
+              title="Total Agents"
+              value={agentMetrics.agents.length}
+              icon={<CpuChipIcon className="h-6 w-6" />}
+              iconBgColor="bg-accent-primary/20"
+              iconColor="text-accent-primary"
+            />
+            <KPICard
+              title="Total Operations"
+              value={formatNumber(totalOperations)}
+              icon={<CheckCircleIcon className="h-6 w-6" />}
+              iconBgColor="bg-status-success/20"
+              iconColor="text-status-success"
+            />
+            <KPICard
+              title="Avg Duration"
+              value={`${(avgDuration / 1000).toFixed(1)}s`}
+              icon={<ClockIcon className="h-6 w-6" />}
+              iconBgColor="bg-status-info/20"
+              iconColor="text-status-info"
+              subtitle="Per operation"
+            />
+            <KPICard
+              title="Error Rate"
+              value={`${errorRate.toFixed(1)}%`}
+              icon={<ExclamationTriangleIcon className="h-6 w-6" />}
+              iconBgColor={errorRate > 5 ? 'bg-status-error/20' : 'bg-status-warning/20'}
+              iconColor={errorRate > 5 ? 'text-status-error' : 'text-status-warning'}
+              trend={{
+                value: errorRate,
+                direction: errorRate > 5 ? 'down' : errorRate > 0 ? 'neutral' : 'up',
+              }}
+            />
+          </div>
+
+          {/* Agent Cards Grid */}
+          <div
+            className="grid grid-cols-1 md:grid-cols-4 gap-6"
+            role="region"
+            aria-label="Individual agent summaries"
+          >
             {agentMetrics.agents.map((agent) => (
               <GlassCard key={agent.agent_name}>
                 <div className="text-center">
                   <div className="w-12 h-12 rounded-xl bg-accent-primary/20 flex items-center justify-center mx-auto mb-3">
-                    <CpuChipIcon className="h-6 w-6 text-accent-primary" />
+                    <CpuChipIcon className="h-6 w-6 text-accent-primary" aria-hidden="true" />
                   </div>
                   <h3 className="text-body font-semibold text-text-primary mb-1">
                     {agent.agent_name}
@@ -58,68 +114,11 @@ export default function MetricsAgents() {
             ))}
           </div>
 
-          {/* Detailed Table */}
-          <GlassCard title="Agent Details" noPadding>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="px-6 py-4 text-left text-body-sm font-semibold text-text-secondary">Agent</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Operations</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Total Time</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Avg Time</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Errors</th>
-                    <th className="px-6 py-4 text-right text-body-sm font-semibold text-text-secondary">Error Rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {agentMetrics.agents.map((agent) => {
-                    const errorRate = agent.operations > 0 ? agent.errors / agent.operations : 0
-
-                    return (
-                      <tr key={agent.agent_name} className="border-b border-border/50 hover:bg-bg-tertiary/30">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-accent-primary/20 flex items-center justify-center">
-                              <CpuChipIcon className="h-4 w-4 text-accent-primary" />
-                            </div>
-                            <span className="text-body-sm font-medium text-text-primary">
-                              {agent.agent_name}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className="text-body-sm text-text-primary">
-                            {formatNumber(agent.operations)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className="text-body-sm text-text-secondary">
-                            {formatDuration(agent.total_duration_ms)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className="text-body-sm text-text-secondary">
-                            {formatDuration(agent.avg_duration_ms)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className={`text-body-sm ${agent.errors > 0 ? 'text-status-error' : 'text-text-muted'}`}>
-                            {agent.errors}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <span className={`text-body-sm ${errorRate > 0.1 ? 'text-status-error' : errorRate > 0 ? 'text-status-warning' : 'text-status-success'}`}>
-                            {(errorRate * 100).toFixed(1)}%
-                          </span>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </GlassCard>
+          {/* Detailed Agent Table */}
+          <AgentTable
+            agents={agentMetrics.agents}
+            isLoading={isLoadingAgents}
+          />
         </div>
       )}
     </div>

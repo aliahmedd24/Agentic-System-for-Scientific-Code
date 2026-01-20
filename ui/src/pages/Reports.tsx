@@ -1,55 +1,96 @@
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { GlassCard } from '@/components/ui/GlassCard'
+import { Tabs, TabPanel } from '@/components/ui/Tabs'
 import { Button } from '@/components/ui/Button'
-import { getReportUrl } from '@/api/endpoints'
 import {
-  DocumentTextIcon,
-  CodeBracketIcon,
-  DocumentArrowDownIcon,
+  ReportGenerator,
+  ReportPreview,
+  type ReportFormat,
+  type ReportOptions,
+} from '@/components/reports'
+import { getReportUrl } from '@/api/endpoints'
+import { useToastStore } from '@/components/ui/Toast'
+import {
+  Cog6ToothIcon,
+  EyeIcon,
 } from '@heroicons/react/24/outline'
 
-const reportFormats = [
-  {
-    id: 'html',
-    name: 'HTML Report',
-    description: 'Full interactive report with knowledge graph visualization',
-    icon: DocumentTextIcon,
-    extension: '.html',
-  },
-  {
-    id: 'json',
-    name: 'JSON Export',
-    description: 'Structured data for programmatic access',
-    icon: CodeBracketIcon,
-    extension: '.json',
-  },
-  {
-    id: 'markdown',
-    name: 'Markdown Report',
-    description: 'Readable text format for documentation',
-    icon: DocumentTextIcon,
-    extension: '.md',
-  },
-] as const
+const tabItems = [
+  { label: 'Generate', icon: Cog6ToothIcon },
+  { label: 'Preview', icon: EyeIcon },
+]
+
+const defaultOptions: ReportOptions = {
+  includePaper: true,
+  includeRepo: true,
+  includeMappings: true,
+  includeTests: true,
+  includeGraph: true,
+}
 
 export default function Reports() {
   const { jobId } = useParams<{ jobId: string }>()
+  const addToast = useToastStore((s) => s.addToast)
 
-  const handleDownload = (format: 'html' | 'json' | 'markdown') => {
+  const [selectedFormat, setSelectedFormat] = useState<ReportFormat>('html')
+  const [options, setOptions] = useState<ReportOptions>(defaultOptions)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [activeTab, setActiveTab] = useState(0)
+
+  const handleGenerate = async () => {
     if (!jobId) return
-    const url = getReportUrl(jobId, format)
-    window.open(url, '_blank')
+
+    setIsGenerating(true)
+
+    try {
+      // For now, we just open the report URL since the backend generates on-demand
+      // In a more complete implementation, this could POST options to customize the report
+      const url = getReportUrl(jobId, selectedFormat)
+
+      // Simulate generation delay for UX
+      await new Promise((resolve) => setTimeout(resolve, 500))
+
+      window.open(url, '_blank')
+
+      addToast({
+        type: 'success',
+        title: 'Report generated',
+        message: `Your ${selectedFormat.toUpperCase()} report is ready`,
+      })
+
+      // Switch to preview tab
+      setActiveTab(1)
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Failed to generate report',
+        message: error instanceof Error ? error.message : 'An error occurred',
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  if (!jobId) {
+    return (
+      <div className="animate-in">
+        <PageHeader title="Reports" />
+        <div className="py-16 text-center text-text-muted">
+          No job ID provided
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="animate-in">
       <PageHeader
-        title="Download Reports"
+        title="Reports"
         breadcrumbs={[
           { label: 'Dashboard', href: '/' },
           { label: 'Jobs', href: '/jobs' },
-          { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
+          { label: jobId.slice(0, 8), href: `/jobs/${jobId}` },
           { label: 'Reports' },
         ]}
         actions={
@@ -64,47 +105,29 @@ export default function Reports() {
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {reportFormats.map((format) => (
-          <GlassCard
-            key={format.id}
-            variant="interactive"
-            className="text-center"
-            onClick={() => handleDownload(format.id)}
-          >
-            <div className="flex flex-col items-center py-4">
-              <div className="w-16 h-16 rounded-2xl bg-accent-primary/20 flex items-center justify-center mb-4">
-                <format.icon className="h-8 w-8 text-accent-primary" />
-              </div>
-              <h3 className="text-heading-3 text-text-primary mb-2">{format.name}</h3>
-              <p className="text-body-sm text-text-secondary mb-4">{format.description}</p>
-              <Button
-                variant="secondary"
-                leftIcon={<DocumentArrowDownIcon className="h-5 w-5" />}
-              >
-                Download {format.extension}
-              </Button>
-            </div>
-          </GlassCard>
-        ))}
-      </div>
+      <Tabs
+        items={tabItems}
+        variant="default"
+        selectedIndex={activeTab}
+        onChange={setActiveTab}
+      >
+        {/* Generate Tab */}
+        <TabPanel>
+          <ReportGenerator
+            selectedFormat={selectedFormat}
+            onFormatChange={setSelectedFormat}
+            options={options}
+            onOptionsChange={setOptions}
+            onGenerate={handleGenerate}
+            isGenerating={isGenerating}
+          />
+        </TabPanel>
 
-      {/* Preview Section */}
-      <div className="mt-8">
-        <GlassCard title="Report Preview" subtitle="HTML report preview">
-          <div className="aspect-video bg-bg-tertiary rounded-lg flex items-center justify-center">
-            {jobId ? (
-              <iframe
-                src={getReportUrl(jobId, 'html')}
-                className="w-full h-full rounded-lg"
-                title="Report Preview"
-              />
-            ) : (
-              <p className="text-text-muted">No report available</p>
-            )}
-          </div>
-        </GlassCard>
-      </div>
+        {/* Preview Tab */}
+        <TabPanel>
+          <ReportPreview jobId={jobId} format={selectedFormat} />
+        </TabPanel>
+      </Tabs>
     </div>
   )
 }

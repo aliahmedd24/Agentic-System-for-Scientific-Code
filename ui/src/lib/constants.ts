@@ -33,6 +33,27 @@ export const LLM_PROVIDERS = [
 
 export type LLMProvider = typeof LLM_PROVIDERS[number]['id']
 
+// LLM models per provider
+export const LLM_MODELS = {
+  gemini: [
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', default: true },
+    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', default: true },
+    { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
+    { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+  ],
+  openai: [
+    { id: 'gpt-4o', label: 'GPT-4o', default: true },
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+  ],
+} as const
+
+export type LLMModel = typeof LLM_MODELS[LLMProvider][number]['id']
+
 // Knowledge graph node types
 export const NODE_TYPES = {
   // Paper nodes

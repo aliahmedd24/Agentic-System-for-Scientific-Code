@@ -26,7 +26,7 @@ interface TestResultCardProps {
 
 function TestResultCard({ result }: TestResultCardProps) {
   const hasOutput = result.stdout || result.stderr
-  const hasError = result.error || result.stderr
+  void (result.error || result.stderr) // hasError reserved
 
   return (
     <Disclosure>

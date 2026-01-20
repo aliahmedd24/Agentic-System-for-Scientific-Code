@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Highlight, themes } from 'prism-react-renderer'
+import { Highlight, themes, type RenderProps, type Token } from 'prism-react-renderer'
 import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/cn'
 import { useToastStore } from '@/components/ui/Toast'
@@ -122,12 +122,12 @@ export function CodeBlock({
           code={trimmedCode}
           language={prismLanguage}
         >
-          {({ className: hlClassName, style, tokens, getLineProps, getTokenProps }) => (
+          {({ className: hlClassName, style, tokens, getLineProps, getTokenProps }: RenderProps) => (
             <pre
               className={cn(hlClassName, 'p-4 text-body-sm font-mono m-0')}
               style={{ ...style, backgroundColor: 'transparent' }}
             >
-              {tokens.map((line, i) => {
+              {tokens.map((line: Token[], i: number) => {
                 const lineProps = getLineProps({ line, key: i })
                 return (
                   <div
@@ -141,7 +141,7 @@ export function CodeBlock({
                       </span>
                     )}
                     <span className="table-cell">
-                      {line.map((token, key) => (
+                      {line.map((token: Token, key: number) => (
                         <span key={key} {...getTokenProps({ token, key })} />
                       ))}
                     </span>

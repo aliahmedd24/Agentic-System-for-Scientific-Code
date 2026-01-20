@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cancelJob, startAnalysis, startAnalysisWithUpload } from '@/api/endpoints'
 import { useToastStore } from '@/components/ui/Toast'
-import type { AnalysisRequest, JobResponse, LLMProvider } from '@/api/types'
+import type { LLMProvider } from '@/api/types'
 
 /**
  * React Query mutations for job operations

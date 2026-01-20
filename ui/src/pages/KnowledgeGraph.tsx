@@ -1,76 +1,245 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { GlassCard } from '@/components/ui/GlassCard'
 import { Button } from '@/components/ui/Button'
-import { Input } from '@/components/ui/Input'
+import { LoadingSpinner } from '@/components/data-display/LoadingSpinner'
 import { NODE_TYPES } from '@/lib/constants'
+import { cn } from '@/lib/cn'
 import * as api from '@/api/endpoints'
-import type { KnowledgeGraphData, GraphNode } from '@/api/types'
+
 import {
-  MagnifyingGlassIcon,
-  ArrowsPointingOutIcon,
-  ArrowPathIcon,
-} from '@heroicons/react/24/outline'
+  KnowledgeGraphCanvas,
+  GraphControls,
+  NodeTypeFilter,
+  GraphSearch,
+  NodeDetails,
+  GraphLegend,
+  useKnowledgeGraph,
+  useGraphSearch,
+  useGraphFilter,
+  useFullscreen,
+} from '@/components/graph'
+import type { D3Node, Transform } from '@/components/graph'
+import type { GraphNode } from '@/api/types'
 
 export default function KnowledgeGraph() {
   const { jobId } = useParams<{ jobId: string }>()
-  const [graphData, setGraphData] = useState<KnowledgeGraphData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
-  const [activeFilters, setActiveFilters] = useState<string[]>(Object.keys(NODE_TYPES))
 
+  // Refs
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasContainerRef = useRef<HTMLDivElement>(null)
+
+  // Graph data hooks
+  const { graphData, isLoading, error, refetch, stats } = useKnowledgeGraph(jobId)
+  const { search, results: searchResults, isSearching, clearSearch } = useGraphSearch(jobId)
+
+  // Filter state
+  const { filteredData, filterState, toggleType, setActiveTypes, resetFilters } = useGraphFilter(
+    graphData?.nodes || [],
+    graphData?.links || []
+  )
+
+  // Fullscreen hook
+  const { isFullscreen, toggleFullscreen } = useFullscreen(containerRef)
+
+  // Local state
+  const [selectedNode, setSelectedNode] = useState<D3Node | null>(null)
+  const [neighbors, setNeighbors] = useState<GraphNode[]>([])
+  const [isLoadingNeighbors, setIsLoadingNeighbors] = useState(false)
+  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, k: 1 })
+  const [hoveredNode, setHoveredNode] = useState<D3Node | null>(null)
+
+  // Calculate node counts for filter
+  const nodeCounts = useMemo(() => {
+    if (!graphData?.nodes) return {}
+    const counts: Record<string, number> = {}
+    graphData.nodes.forEach(node => {
+      const type = node.type.toUpperCase()
+      counts[type] = (counts[type] || 0) + 1
+    })
+    return counts
+  }, [graphData?.nodes])
+
+  // Fetch neighbors when a node is selected
   useEffect(() => {
-    if (jobId) {
-      loadGraph()
+    if (!selectedNode || !jobId) {
+      setNeighbors([])
+      return
     }
-  }, [jobId])
 
-  const loadGraph = async () => {
-    if (!jobId) return
-    setIsLoading(true)
-    try {
-      const data = await api.getKnowledgeGraph(jobId)
-      setGraphData(data)
-    } catch (err) {
-      console.error('Failed to load knowledge graph:', err)
-    } finally {
-      setIsLoading(false)
+    const fetchNeighbors = async () => {
+      setIsLoadingNeighbors(true)
+      try {
+        const result = await api.getGraphNode(jobId, selectedNode.id, 1)
+        setNeighbors(result.neighbors || [])
+      } catch (err) {
+        console.error('Failed to fetch neighbors:', err)
+        setNeighbors([])
+      } finally {
+        setIsLoadingNeighbors(false)
+      }
     }
+
+    fetchNeighbors()
+  }, [selectedNode, jobId])
+
+  // Handlers
+  const handleNodeClick = useCallback((node: D3Node) => {
+    setSelectedNode(node)
+  }, [])
+
+  const handleNodeHover = useCallback((node: D3Node | null) => {
+    setHoveredNode(node)
+  }, [])
+
+  const handleBackgroundClick = useCallback(() => {
+    setSelectedNode(null)
+  }, [])
+
+  const handleCloseDetails = useCallback(() => {
+    setSelectedNode(null)
+  }, [])
+
+  const handleNavigateToNode = useCallback((nodeId: string) => {
+    // Find node in data and select it
+    const node = graphData?.nodes.find(n => n.id === nodeId)
+    if (node) {
+      setSelectedNode(node as D3Node)
+    }
+  }, [graphData?.nodes])
+
+
+  const handleSelectAll = useCallback(() => {
+    setActiveTypes(new Set(Object.keys(NODE_TYPES)))
+  }, [setActiveTypes])
+
+  const handleClearAll = useCallback(() => {
+    setActiveTypes(new Set())
+  }, [setActiveTypes])
+
+  // Canvas control handlers
+  const handleZoomIn = useCallback(() => {
+    const canvas = canvasContainerRef.current as unknown as { zoomIn?: () => void }
+    canvas?.zoomIn?.()
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    const canvas = canvasContainerRef.current as unknown as { zoomOut?: () => void }
+    canvas?.zoomOut?.()
+  }, [])
+
+  const handleResetView = useCallback(() => {
+    const canvas = canvasContainerRef.current as unknown as { resetView?: () => void }
+    canvas?.resetView?.()
+  }, [])
+
+  const handleFitToView = useCallback(() => {
+    const canvas = canvasContainerRef.current as unknown as { fitToView?: () => void }
+    canvas?.fitToView?.()
+  }, [])
+
+  const handleTransformChange = useCallback((newTransform: Transform) => {
+    setTransform(newTransform)
+  }, [])
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="animate-in">
+        <PageHeader
+          title="Knowledge Graph"
+          breadcrumbs={[
+            { label: 'Dashboard', href: '/' },
+            { label: 'Jobs', href: '/jobs' },
+            { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
+            { label: 'Knowledge Graph' },
+          ]}
+        />
+        <div className="flex items-center justify-center h-[600px]">
+          <LoadingSpinner size="xl" label="Loading knowledge graph..." />
+        </div>
+      </div>
+    )
   }
 
-  const handleSearch = async () => {
-    if (!jobId || !searchQuery.trim()) return
-    try {
-      const results = await api.searchKnowledgeGraph(jobId, searchQuery)
-      // Highlight matching nodes
-      console.log('Search results:', results)
-    } catch (err) {
-      console.error('Search failed:', err)
-    }
+  // Error state
+  if (error) {
+    return (
+      <div className="animate-in">
+        <PageHeader
+          title="Knowledge Graph"
+          breadcrumbs={[
+            { label: 'Dashboard', href: '/' },
+            { label: 'Jobs', href: '/jobs' },
+            { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
+            { label: 'Knowledge Graph' },
+          ]}
+        />
+        <GlassCard className="text-center py-12">
+          <p className="text-status-error mb-4">Failed to load knowledge graph</p>
+          <p className="text-text-muted mb-6">{error.message}</p>
+          <Button onClick={refetch}>Try Again</Button>
+        </GlassCard>
+      </div>
+    )
   }
 
-  const toggleFilter = (nodeType: string) => {
-    setActiveFilters((prev) =>
-      prev.includes(nodeType)
-        ? prev.filter((t) => t !== nodeType)
-        : [...prev, nodeType]
+  // Empty state
+  if (!graphData || graphData.nodes.length === 0) {
+    return (
+      <div className="animate-in">
+        <PageHeader
+          title="Knowledge Graph"
+          breadcrumbs={[
+            { label: 'Dashboard', href: '/' },
+            { label: 'Jobs', href: '/jobs' },
+            { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
+            { label: 'Knowledge Graph' },
+          ]}
+        />
+        <GlassCard className="text-center py-12">
+          <p className="text-text-muted">No knowledge graph data available</p>
+          <p className="text-body-sm text-text-muted mt-2">
+            The graph will be generated after analysis completes
+          </p>
+        </GlassCard>
+      </div>
     )
   }
 
   return (
-    <div className="animate-in">
+    <div
+      ref={containerRef}
+      className={cn(
+        'animate-in',
+        isFullscreen && 'fixed inset-0 z-50 bg-bg-primary p-6'
+      )}
+    >
       <PageHeader
         title="Knowledge Graph"
-        breadcrumbs={[
-          { label: 'Dashboard', href: '/' },
-          { label: 'Jobs', href: '/jobs' },
-          { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
-          { label: 'Knowledge Graph' },
-        ]}
+        breadcrumbs={
+          isFullscreen
+            ? undefined
+            : [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Jobs', href: '/jobs' },
+                { label: jobId?.slice(0, 8) || '', href: `/jobs/${jobId}` },
+                { label: 'Knowledge Graph' },
+              ]
+        }
         actions={
           <div className="flex items-center gap-3">
+            {/* Stats Summary */}
+            <div className="hidden md:flex items-center gap-4 text-body-sm text-text-muted">
+              <span>
+                <span className="text-text-primary font-medium">{stats?.totalNodes || 0}</span> nodes
+              </span>
+              <span>
+                <span className="text-text-primary font-medium">{stats?.totalLinks || 0}</span> links
+              </span>
+            </div>
+
             <Link to={`/jobs/${jobId}/results`}>
               <Button variant="secondary">View Results</Button>
             </Link>
@@ -81,128 +250,138 @@ export default function KnowledgeGraph() {
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className={cn(
+        'grid grid-cols-1 lg:grid-cols-4 gap-6',
+        isFullscreen && 'h-[calc(100vh-120px)]'
+      )}>
         {/* Controls Sidebar */}
-        <div className="space-y-6">
+        <div className={cn(
+          'space-y-6',
+          isFullscreen && 'lg:col-span-1 overflow-y-auto'
+        )}>
           {/* Search */}
           <GlassCard title="Search">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Search nodes..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              />
-              <Button variant="icon" onClick={handleSearch}>
-                <MagnifyingGlassIcon className="h-5 w-5" />
-              </Button>
-            </div>
+            <GraphSearch
+              searchFunction={search}
+              results={searchResults}
+              isSearching={isSearching}
+              onClearSearch={clearSearch}
+            />
           </GlassCard>
 
-          {/* Filters */}
+          {/* Node Type Filters */}
           <GlassCard title="Node Types">
-            <div className="space-y-2">
-              {Object.entries(NODE_TYPES).map(([key, config]) => (
-                <label
-                  key={key}
-                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-bg-tertiary/50 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={activeFilters.includes(key)}
-                    onChange={() => toggleFilter(key)}
-                    className="w-4 h-4 rounded border-border bg-bg-tertiary text-accent-primary focus:ring-accent-primary"
-                  />
-                  <span
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: config.color }}
-                  />
-                  <span className="text-body-sm text-text-primary">{config.label}</span>
-                </label>
-              ))}
-            </div>
+            <NodeTypeFilter
+              activeTypes={filterState.activeTypes}
+              onToggleType={toggleType}
+              onSelectAll={handleSelectAll}
+              onClearAll={handleClearAll}
+              nodeCounts={nodeCounts}
+            />
           </GlassCard>
 
-          {/* Selected Node */}
+          {/* Selected Node Details */}
           {selectedNode && (
-            <GlassCard title="Selected Node">
-              <div className="space-y-3">
-                <div>
-                  <p className="text-caption text-text-muted">Name</p>
-                  <p className="text-body-sm text-text-primary font-medium">{selectedNode.name}</p>
-                </div>
-                <div>
-                  <p className="text-caption text-text-muted">Type</p>
-                  <p className="text-body-sm text-text-primary">{selectedNode.type}</p>
-                </div>
-                {selectedNode.description && (
-                  <div>
-                    <p className="text-caption text-text-muted">Description</p>
-                    <p className="text-body-sm text-text-secondary">{selectedNode.description}</p>
-                  </div>
-                )}
-              </div>
-            </GlassCard>
+            <NodeDetails
+              node={selectedNode}
+              neighbors={neighbors}
+              neighborCount={neighbors.length}
+              onClose={handleCloseDetails}
+              onNavigateToNode={handleNavigateToNode}
+              isLoading={isLoadingNeighbors}
+            />
           )}
         </div>
 
         {/* Graph Canvas */}
-        <div className="lg:col-span-3">
-          <GlassCard noPadding className="relative overflow-hidden" style={{ height: '600px' }}>
-            {isLoading ? (
-              <div className="absolute inset-0 flex items-center justify-center text-text-muted">
-                Loading knowledge graph...
-              </div>
-            ) : !graphData || graphData.nodes.length === 0 ? (
-              <div className="absolute inset-0 flex items-center justify-center text-text-muted">
-                No graph data available
-              </div>
-            ) : (
-              <>
-                {/* Placeholder for D3.js visualization */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="w-48 h-48 mx-auto mb-4 rounded-full bg-gradient-to-br from-accent-primary/20 to-purple-500/20 flex items-center justify-center">
-                      <div className="text-center">
-                        <p className="text-heading-1 text-accent-primary">{graphData.nodes.length}</p>
-                        <p className="text-body-sm text-text-muted">nodes</p>
-                      </div>
-                    </div>
-                    <p className="text-body text-text-secondary">
-                      Interactive D3.js visualization
-                    </p>
-                    <p className="text-body-sm text-text-muted mt-1">
-                      {graphData.links.length} connections
-                    </p>
+        <div className={cn(
+          'lg:col-span-3',
+          isFullscreen && 'h-full'
+        )}>
+          <GlassCard
+            noPadding
+            className={cn(
+              'relative overflow-hidden',
+              isFullscreen ? 'h-full' : 'h-[700px]'
+            )}
+          >
+            {/* Canvas */}
+            <div ref={canvasContainerRef} className="absolute inset-0">
+              <KnowledgeGraphCanvas
+                nodes={filteredData.nodes}
+                links={filteredData.links}
+                selectedNode={selectedNode}
+                highlightedIds={searchResults.highlightedIds}
+                activeFilters={filterState.activeTypes}
+                onNodeClick={handleNodeClick}
+                onNodeHover={handleNodeHover}
+                onBackgroundClick={handleBackgroundClick}
+                onTransformChange={handleTransformChange}
+              />
+            </div>
+
+            {/* Graph Controls */}
+            <GraphControls
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              onResetView={handleResetView}
+              onFitToView={handleFitToView}
+              onToggleFullscreen={toggleFullscreen}
+              isFullscreen={isFullscreen}
+              zoomLevel={transform.k}
+              className="absolute top-4 right-4"
+            />
+
+            {/* Legend */}
+            <GraphLegend
+              activeTypes={filterState.activeTypes}
+              compact
+              className="absolute bottom-4 left-4"
+            />
+
+            {/* Hover Tooltip */}
+            {hoveredNode && (
+              <div className="absolute top-4 left-4 max-w-xs pointer-events-none">
+                <div className="p-3 rounded-lg bg-bg-glass/95 backdrop-blur-[20px] border border-border shadow-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{
+                        backgroundColor:
+                          NODE_TYPES[hoveredNode.type.toUpperCase() as keyof typeof NODE_TYPES]?.color ||
+                          '#64748b',
+                      }}
+                    />
+                    <span className="text-body-sm font-medium text-text-primary truncate">
+                      {hoveredNode.name}
+                    </span>
                   </div>
+                  <span className="text-caption text-text-muted">
+                    {NODE_TYPES[hoveredNode.type.toUpperCase() as keyof typeof NODE_TYPES]?.label ||
+                      hoveredNode.type}
+                  </span>
+                  {hoveredNode.description && (
+                    <p className="text-caption text-text-secondary mt-1 line-clamp-2">
+                      {hoveredNode.description}
+                    </p>
+                  )}
                 </div>
+              </div>
+            )}
 
-                {/* Controls */}
-                <div className="absolute top-4 right-4 flex gap-2">
-                  <Button variant="icon" title="Reset View" onClick={loadGraph}>
-                    <ArrowPathIcon className="h-5 w-5" />
-                  </Button>
-                  <Button variant="icon" title="Fullscreen">
-                    <ArrowsPointingOutIcon className="h-5 w-5" />
-                  </Button>
+            {/* Filter indicator */}
+            {filteredData.nodes.length < (graphData?.nodes.length || 0) && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2">
+                <div className="px-3 py-1.5 rounded-full bg-bg-glass/90 backdrop-blur-[20px] border border-border text-body-sm text-text-secondary">
+                  Showing {filteredData.nodes.length} of {graphData?.nodes.length} nodes
+                  <button
+                    onClick={resetFilters}
+                    className="ml-2 text-accent-primary hover:text-accent-secondary transition-colors"
+                  >
+                    Reset
+                  </button>
                 </div>
-
-                {/* Legend */}
-                <div className="absolute bottom-4 left-4 flex flex-wrap gap-3 p-3 rounded-lg bg-bg-secondary/90 backdrop-blur-sm">
-                  {Object.entries(NODE_TYPES)
-                    .filter(([key]) => activeFilters.includes(key))
-                    .slice(0, 6)
-                    .map(([key, config]) => (
-                      <div key={key} className="flex items-center gap-1.5">
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: config.color }}
-                        />
-                        <span className="text-caption text-text-muted">{config.label}</span>
-                      </div>
-                    ))}
-                </div>
-              </>
+              </div>
             )}
           </GlassCard>
         </div>

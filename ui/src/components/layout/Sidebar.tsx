@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/cn'
+import { useHealthStatus } from '@/hooks/useHealthStatus'
 import {
   HomeIcon,
   PlusCircleIcon,
@@ -71,9 +72,14 @@ function HealthIndicator({ status, activeJobs = 0 }: HealthIndicatorProps) {
   const Icon = status === 'healthy' ? CheckCircleIcon : ExclamationCircleIcon
 
   return (
-    <div className="px-4 py-3 border-t border-border">
+    <div
+      className="px-4 py-3 border-t border-border"
+      role="status"
+      aria-live="polite"
+      aria-label={`System status: ${config.label}${activeJobs > 0 ? `, ${activeJobs} active jobs` : ''}`}
+    >
       <div className="flex items-center gap-3">
-        <div className={cn('w-2 h-2 rounded-full', config.bg)} />
+        <div className={cn('w-2 h-2 rounded-full animate-pulse', config.bg)} />
         <div className="flex-1 min-w-0">
           <p className={cn('text-body-sm font-medium', config.color)}>{config.label}</p>
           {activeJobs > 0 && (
@@ -92,6 +98,11 @@ interface SidebarProps {
 
 export function Sidebar({ className }: SidebarProps) {
   const location = useLocation()
+  const { data: healthStatus } = useHealthStatus({ pollInterval: 30000 })
+
+  // Determine health status or default to unknown
+  const status = healthStatus?.status || 'unknown'
+  const activeJobs = healthStatus?.active_jobs || 0
 
   return (
     <aside
@@ -160,7 +171,7 @@ export function Sidebar({ className }: SidebarProps) {
       </nav>
 
       {/* Health Indicator */}
-      <HealthIndicator status="healthy" activeJobs={0} />
+      <HealthIndicator status={status} activeJobs={activeJobs} />
     </aside>
   )
 }

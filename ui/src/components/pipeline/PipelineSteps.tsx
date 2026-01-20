@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import { PIPELINE_STAGES, type PipelineStageId } from '@/lib/constants'
+import { PIPELINE_STAGES } from '@/lib/constants'
 import {
   CheckIcon,
   XMarkIcon,
@@ -26,7 +26,7 @@ const stageIcons: Record<string, string> = {
 
 export function PipelineSteps({
   currentStage,
-  progress,
+  progress: _progress,
   status = 'running',
   compact = false,
   className,
